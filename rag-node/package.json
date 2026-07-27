@@ -1,0 +1,11 @@
+{
+  "name": "dealersedge-marketing-rag-node",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.mjs",
+  "dependencies": {
+    "@aws-sdk/client-bedrock-agent-runtime": "^3.1093.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1093.0",
+    "@aws-sdk/client-s3": "^3.1093.0"
+  }
+}

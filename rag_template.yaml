@@ -1,0 +1,998 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  AI Chatbot — Bedrock Managed Knowledge Base with S3 data source,
+  CloudFront-served frontend and logs site, RAG Lambda functions, and ingest pipeline.
+
+Parameters:
+
+  AppName:
+    Type: String
+    Description: >-
+      Short identifier used as a prefix for all resource names.
+      Lowercase letters, numbers, and hyphens only. Must start with a letter. Max 20 characters.
+    AllowedPattern: '^[a-z][a-z0-9-]{0,19}$'
+    ConstraintDescription: Must be lowercase, start with a letter, use only alphanumeric and hyphens, max 20 chars.
+
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: S3 bucket that holds all Lambda deployment packages
+
+  IngestFunctionS3Key:
+    Type: String
+    Description: S3 key for the ingest Lambda deployment package
+
+  RagFunctionS3Key:
+    Type: String
+    Description: S3 key for the RAG Python Lambda deployment package
+
+  RagNodeFunctionS3Key:
+    Type: String
+    Description: S3 key for the RAG Node.js Lambda deployment package
+
+  LogIndexerFunctionS3Key:
+    Type: String
+    Description: S3 key for the log indexer Lambda deployment package
+
+  ChatbotAlias:
+    Type: String
+    Description: >-
+      Custom domain alias for the chatbot CloudFront distribution (e.g. edge.example.com).
+      Must match the ChatbotAcmCertificateArn certificate.
+
+  LogsAlias:
+    Type: String
+    Description: >-
+      Custom domain alias for the logs CloudFront distribution (e.g. knowledgebase-log.example.com).
+      Must match the LogsAcmCertificateArn certificate.
+
+  ChatbotAcmCertificateArn:
+    Type: String
+    Description: ACM certificate ARN (must be in us-east-1) covering the ChatbotAlias domain
+
+  LogsAcmCertificateArn:
+    Type: String
+    Description: ACM certificate ARN (must be in us-east-1) covering the LogsAlias domain
+
+  ChatbotWafAclArn:
+    Type: String
+    Description: WAF Web ACL ARN for the chatbot CloudFront distribution
+
+  LogsWafAclArn:
+    Type: String
+    Description: WAF Web ACL ARN for the logs CloudFront distribution
+
+  LogsBasicAuthBase64:
+    Type: String
+    NoEcho: true
+    Description: >-
+      Base64-encoded "username:password" for the logs site basic-auth CloudFront function.
+      Generate with: echo -n "user:pass" | base64
+
+  GoogleSheetsSecretArn:
+    Type: String
+    Description: >-
+      Full ARN of the Secrets Manager secret for Google Sheets credentials
+      used by the ingest Lambda (e.g. arn:aws:secretsmanager:us-east-1:ACCOUNT:secret:name-SUFFIX)
+
+  ApiGatewayExecuteArn:
+    Type: String
+    Default: ''
+    Description: >-
+      API Gateway execute ARN that is allowed to invoke the RAG Python function.
+      Leave blank to skip creating the permission.
+      Format: arn:aws:execute-api:REGION:ACCOUNT:API_ID/*/*/RESOURCE
+
+Conditions:
+  HasApiGatewayArn: !Not [!Equals [!Ref ApiGatewayExecuteArn, '']]
+
+Resources:
+
+  # ============================================================
+  # S3 — shared data bucket (RAG data, frontend assets, logs)
+  # ============================================================
+
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${AppName}-rag-chatbot-data
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  DataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Version: '2008-10-17'
+        Id: PolicyForCloudFrontPrivateContent
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipal
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub arn:aws:s3:::${DataBucket}/*
+            Condition:
+              ArnLike:
+                AWS:SourceArn:
+                  - !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${ChatbotDistribution}
+                  - !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${LogsDistribution}
+
+  # ============================================================
+  # CloudFront — chatbot frontend (ChatbotAlias → /front)
+  # ============================================================
+
+  ChatbotOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub ${AppName}-chatbot-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  ChatbotDistribution:
+    Type: AWS::CloudFront::Distribution
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${AppName}-chat-frontend
+      DistributionConfig:
+        Comment: chatbot public
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2
+        IPV6Enabled: true
+        PriceClass: PriceClass_All
+        Aliases:
+          - !Ref ChatbotAlias
+        ViewerCertificate:
+          MinimumProtocolVersion: TLSv1.2_2021
+          SslSupportMethod: sni-only
+          AcmCertificateArn: !Ref ChatbotAcmCertificateArn
+        WebACLId: !Ref ChatbotWafAclArn
+        Origins:
+          - Id: s3-chatbot-origin
+            DomainName: !Sub ${DataBucket}.s3.amazonaws.com
+            OriginPath: /front
+            OriginAccessControlId: !GetAtt ChatbotOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: s3-chatbot-origin
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          AllowedMethods:
+            - HEAD
+            - GET
+          CachedMethods:
+            - HEAD
+            - GET
+          FunctionAssociations: []
+          LambdaFunctionAssociations: []
+          TrustedSigners: []
+          TrustedKeyGroups: []
+          FieldLevelEncryptionId: ''
+          SmoothStreaming: false
+        Restrictions:
+          GeoRestriction:
+            RestrictionType: none
+            Locations: []
+        CacheBehaviors: []
+        CustomErrorResponses: []
+        OriginGroups:
+          Quantity: 0
+          Items: []
+
+  # ============================================================
+  # CloudFront — logs viewer (LogsAlias → /logs)
+  # ============================================================
+
+  LogsOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub ${AppName}-logs-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  LogsPasswordProtectFunction:
+    Type: AWS::CloudFront::Function
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub ${AppName}-password-protect-logs
+      AutoPublish: true
+      FunctionConfig:
+        Comment: ''
+        Runtime: cloudfront-js-2.0
+      FunctionCode: !Sub |
+        function handler(event) {
+            var request = event.request;
+            var headers = request.headers;
+            var expectedAuth = 'Basic ${LogsBasicAuthBase64}';
+            if (headers.authorization && headers.authorization.value === expectedAuth) {
+                return request;
+            }
+            var response = {
+                statusCode: 401,
+                statusDescription: "Unauthorized",
+                headers: {
+                    "www-authenticate": { value: 'Basic realm="Secure Area"' }
+                }
+            };
+            return response;
+        }
+
+  LogsDistribution:
+    Type: AWS::CloudFront::Distribution
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${AppName}-kb-log
+      DistributionConfig:
+        Comment: ''
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2
+        IPV6Enabled: true
+        PriceClass: PriceClass_All
+        Aliases:
+          - !Ref LogsAlias
+        ViewerCertificate:
+          MinimumProtocolVersion: TLSv1.2_2021
+          SslSupportMethod: sni-only
+          AcmCertificateArn: !Ref LogsAcmCertificateArn
+        WebACLId: !Ref LogsWafAclArn
+        Origins:
+          - Id: s3-logs-origin
+            DomainName: !Sub ${DataBucket}.s3.amazonaws.com
+            OriginPath: /logs
+            OriginAccessControlId: !GetAtt LogsOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: s3-logs-origin
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          AllowedMethods:
+            - HEAD
+            - GET
+          CachedMethods:
+            - HEAD
+            - GET
+          FunctionAssociations:
+            - FunctionARN: !GetAtt LogsPasswordProtectFunction.FunctionARN
+              EventType: viewer-request
+          LambdaFunctionAssociations: []
+          TrustedSigners: []
+          TrustedKeyGroups: []
+          FieldLevelEncryptionId: ''
+          SmoothStreaming: false
+        Restrictions:
+          GeoRestriction:
+            RestrictionType: none
+            Locations: []
+        CacheBehaviors: []
+        CustomErrorResponses: []
+        OriginGroups:
+          Quantity: 0
+          Items: []
+
+  # ============================================================
+  # Bedrock Knowledge Base
+  # ============================================================
+
+  KnowledgeBaseS3Policy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub AmazonBedrockS3PolicyForKnowledgeBase-${AppName}-products-kb
+      Path: /service-role/
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: S3ListBucketStatement
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource: !Sub arn:aws:s3:::${DataBucket}
+            Condition:
+              StringEquals:
+                aws:ResourceAccount: !Ref AWS::AccountId
+          - Sid: S3GetObjectStatement
+            Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource: !Sub arn:aws:s3:::${DataBucket}/*
+            Condition:
+              StringEquals:
+                aws:ResourceAccount: !Ref AWS::AccountId
+
+  KnowledgeBaseCloudWatchPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub AmazonBedrockCloudWatchPolicyForKnowledgeBase-${AppName}-products-kb
+      Path: /service-role/
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CloudWatchWritePermissionStatement
+            Effect: Allow
+            Action:
+              - cloudwatch:PutMetricData
+            Resource: '*'
+            Condition:
+              StringEquals:
+                cloudwatch:namespace: AWS/Bedrock/KnowledgeBases
+
+  KnowledgeBaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AppName}-products-kb-role
+      Path: /service-role/
+      Description: Bedrock Knowledge Base access
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustPolicyStatement
+            Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*
+      ManagedPolicyArns:
+        - !Ref KnowledgeBaseS3Policy
+        - !Ref KnowledgeBaseCloudWatchPolicy
+      Policies:
+        - PolicyName: knowledgebase-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - aoss:APIAccessAll
+                Resource: !Sub arn:aws:aoss:*:*:collection/*
+
+  KnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub ${AppName}-products-kb
+      RoleArn: !GetAtt KnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: MANAGED
+        ManagedKnowledgeBaseConfiguration:
+          EmbeddingModelType: MANAGED
+      Tags: {}
+
+  KnowledgeBaseDataSource:
+    Type: AWS::Bedrock::DataSource
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub ${AppName}-products-kb-data-source
+      KnowledgeBaseId: !Ref KnowledgeBase
+      DataDeletionPolicy: DELETE
+      VectorIngestionConfiguration:
+        ParsingConfiguration:
+          ParsingStrategy: SMART_PARSING
+      DataSourceConfiguration:
+        Type: MANAGED_KNOWLEDGE_BASE_CONNECTOR
+        ManagedKnowledgeBaseConnectorConfiguration:
+          DeletionProtectionConfiguration:
+            DeletionProtectionStatus: DISABLED
+          MediaExtractionConfiguration:
+            AudioExtractionConfiguration:
+              AudioExtractionStatus: DISABLED
+            VideoExtractionConfiguration:
+              VideoExtractionStatus: ENABLED
+            ImageExtractionConfiguration:
+              ImageExtractionStatus: ENABLED
+          ConnectorParameters:
+            type: S3
+            filterConfiguration:
+              maxFileSizeInMegaBytes: '500'
+              inclusionPrefixes:
+                - product-files/
+            version: '1'
+            aclEnabled: false
+            connectionConfiguration:
+              bucketName: !Ref DataBucket
+              bucketOwnerAccountId: !Ref AWS::AccountId
+              bucketArn: !Sub arn:aws:s3:::${DataBucket}
+
+  # ============================================================
+  # Lambda — Ingest (Python 3.13)
+  # ============================================================
+
+  IngestFunctionBasicExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub AWSLambdaBasicExecutionRole-${AppName}-rag-ingest
+      Path: /service-role/
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: logs:CreateLogGroup
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+          - Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppName}-rag-ingest:*
+
+  IngestFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AppName}-rag-ingest-role
+      Path: /service-role/
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref IngestFunctionBasicExecutionPolicy
+      Policies:
+        - PolicyName: !Sub ${AppName}-rag-ingest-role
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: VisualEditor0
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: !Sub arn:aws:s3:::${DataBucket}/product-files/*
+              - Sid: VisualEditor1
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref GoogleSheetsSecretArn
+              - Sid: VisualEditor2
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub arn:aws:s3:::${DataBucket}
+              - Sid: VisualEditor3
+                Effect: Allow
+                Action: bedrock:StartIngestionJob
+                Resource: !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${KnowledgeBase}
+
+  IngestFunction:
+    Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      FunctionName: !Sub ${AppName}-rag-ingest
+      Description: ''
+      Runtime: python3.13
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt IngestFunctionRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref IngestFunctionS3Key
+      MemorySize: 128
+      Timeout: 300
+      PackageType: Zip
+      Architectures:
+        - x86_64
+      EphemeralStorage:
+        Size: 512
+      TracingConfig:
+        Mode: PassThrough
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      LoggingConfig:
+        LogFormat: Text
+        LogGroup: !Sub /aws/lambda/${AppName}-rag-ingest
+      RecursiveLoop: Terminate
+      FileSystemConfigs: []
+      Environment:
+        Variables:
+          KNOWLEDGE_BASE_ID: !Ref KnowledgeBase
+          DATA_SOURCE_ID: !GetAtt KnowledgeBaseDataSource.DataSourceId
+          DATA_BUCKET: !Ref DataBucket
+          GOOGLE_SHEETS_SECRET_ARN: !Ref GoogleSheetsSecretArn
+
+  # ============================================================
+  # Lambda — RAG Python (Python 3.12)
+  # ============================================================
+
+  RagFunctionBasicExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub AWSLambdaBasicExecutionRole-${AppName}-rag
+      Path: /service-role/
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: logs:CreateLogGroup
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+          - Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppName}-rag:*
+
+  RagFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AppName}-rag-role
+      Path: /service-role/
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref RagFunctionBasicExecutionPolicy
+      Policies:
+        - PolicyName: !Sub ${AppName}-lambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: Statement1
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub arn:aws:s3:::${DataBucket}/*
+              - Effect: Allow
+                Action:
+                  - bedrock:AgenticRetrieveStream
+                  - bedrock:Retrieve
+                  - bedrock:RetrieveAndGenerate
+                Resource: '*'
+
+  RagFunction:
+    Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      FunctionName: !Sub ${AppName}-rag
+      Description: ''
+      Runtime: python3.12
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt RagFunctionRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref RagFunctionS3Key
+      MemorySize: 128
+      Timeout: 300
+      PackageType: Zip
+      Architectures:
+        - x86_64
+      EphemeralStorage:
+        Size: 512
+      TracingConfig:
+        Mode: PassThrough
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      LoggingConfig:
+        LogFormat: Text
+        LogGroup: !Sub /aws/lambda/${AppName}-rag
+      RecursiveLoop: Terminate
+      FileSystemConfigs: []
+      Environment:
+        Variables:
+          KNOWLEDGE_BASE_ID: !Ref KnowledgeBase
+          DATA_BUCKET: !Ref DataBucket
+
+  RagFunctionApiGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Condition: HasApiGatewayArn
+    Properties:
+      FunctionName: !GetAtt RagFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Ref ApiGatewayExecuteArn
+
+  # ============================================================
+  # Lambda — RAG Node.js (nodejs24.x) with Function URL
+  # ============================================================
+
+  RagNodeFunctionBasicExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub AWSLambdaBasicExecutionRole-${AppName}-rag-node
+      Path: /service-role/
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: logs:CreateLogGroup
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+          - Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppName}-rag-node:*
+
+  RagNodeFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AppName}-rag-node-role
+      Path: /service-role/
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+        - !Ref RagNodeFunctionBasicExecutionPolicy
+      Policies:
+        - PolicyName: bedrock-agenticstream
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:AgenticRetrieveStream
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub arn:aws:s3:::${DataBucket}/*
+
+  RagNodeFunction:
+    Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      FunctionName: !Sub ${AppName}-rag-node
+      Description: ''
+      Runtime: nodejs24.x
+      Handler: index.handler
+      Role: !GetAtt RagNodeFunctionRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref RagNodeFunctionS3Key
+      MemorySize: 128
+      Timeout: 300
+      PackageType: Zip
+      Architectures:
+        - x86_64
+      EphemeralStorage:
+        Size: 512
+      TracingConfig:
+        Mode: PassThrough
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      LoggingConfig:
+        LogFormat: Text
+        LogGroup: !Sub /aws/lambda/${AppName}-rag-node
+      RecursiveLoop: Terminate
+      FileSystemConfigs: []
+      Environment:
+        Variables:
+          KNOWLEDGE_BASE_ID: !Ref KnowledgeBase
+          DATA_BUCKET: !Ref DataBucket
+
+  RagNodeFunctionUrl:
+    Type: AWS::Lambda::Url
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TargetFunctionArn: !Ref RagNodeFunction
+      InvokeMode: RESPONSE_STREAM
+      AuthType: NONE
+      Cors:
+        AllowCredentials: false
+        AllowOrigins:
+          - !Sub https://${ChatbotAlias}
+        AllowMethods:
+          - POST
+        AllowHeaders:
+          - content-type
+        ExposeHeaders: []
+
+  # Allows public invocation via the function URL
+  RagNodeFunctionUrlInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt RagNodeFunction.Arn
+      Action: lambda:InvokeFunctionUrl
+      FunctionUrlAuthType: NONE
+      Principal: '*'
+
+  # Allows the function URL mechanism to call InvokeFunction internally
+  RagNodeFunctionInvokeViaUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt RagNodeFunction.Arn
+      Action: lambda:InvokeFunction
+      InvokedViaFunctionUrl: true
+      Principal: '*'
+
+  # ============================================================
+  # Lambda — Log Indexer (Python 3.14)
+  # ============================================================
+
+  LogIndexerFunctionBasicExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub AWSLambdaBasicExecutionRole-${AppName}-rag-log-indexer
+      Path: /service-role/
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: logs:CreateLogGroup
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+          - Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppName}-rag-log-indexer:*
+
+  LogIndexerFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AppName}-rag-log-indexer-role
+      Path: /service-role/
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref LogIndexerFunctionBasicExecutionPolicy
+      Policies:
+        - PolicyName: !Sub ${AppName}-rag-log-indexer
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: VisualEditor0
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${DataBucket}/*
+                  - !Sub arn:aws:s3:::${DataBucket}
+
+  LogIndexerFunction:
+    Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      FunctionName: !Sub ${AppName}-rag-log-indexer
+      Description: ''
+      Runtime: python3.14
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt LogIndexerFunctionRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LogIndexerFunctionS3Key
+      MemorySize: 128
+      Timeout: 300
+      PackageType: Zip
+      Architectures:
+        - x86_64
+      EphemeralStorage:
+        Size: 512
+      TracingConfig:
+        Mode: PassThrough
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      LoggingConfig:
+        LogFormat: Text
+        LogGroup: !Sub /aws/lambda/${AppName}-rag-log-indexer
+      RecursiveLoop: Terminate
+      FileSystemConfigs: []
+      Environment:
+        Variables:
+          DATA_BUCKET: !Ref DataBucket
+
+  # ============================================================
+  # EventBridge Scheduler — ingest pipeline
+  # ============================================================
+
+  IngestSchedulerExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${AppName}-ingest-scheduler-policy
+      Path: /service-role/
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource:
+              - !GetAtt IngestFunction.Arn
+              - !Sub ${IngestFunction.Arn}:*
+
+  IngestSchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AppName}-ingest-scheduler-role
+      Path: /service-role/
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Ref IngestSchedulerExecutionPolicy
+
+  # Dedicated scheduler execution role for the log indexer nightly run.
+  # The original export reused the Lambda's own role here, which lacked
+  # lambda:InvokeFunction — this dedicated role is the correct pattern.
+  LogIndexerSchedulerExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${AppName}-log-indexer-scheduler-policy
+      Path: /service-role/
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource:
+              - !GetAtt LogIndexerFunction.Arn
+              - !Sub ${LogIndexerFunction.Arn}:*
+
+  LogIndexerSchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AppName}-log-indexer-scheduler-role
+      Path: /service-role/
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Ref LogIndexerSchedulerExecutionPolicy
+
+  # NOTE: The "default" schedule group is auto-created in every AWS account/region.
+  # Omitting it here to avoid stack failures if it already exists.
+  # The schedules below reference it by name ("default"), which is always valid.
+
+  HourlyIngestSchedule:
+    Type: AWS::Scheduler::Schedule
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub ${AppName}-hourly
+      GroupName: default
+      Description: ''
+      State: ENABLED
+      ScheduleExpression: 'cron(0 * * * ? *)'
+      ScheduleExpressionTimezone: America/Toronto
+      FlexibleTimeWindow:
+        Mode: FLEXIBLE
+        MaximumWindowInMinutes: 30
+      Target:
+        Arn: !GetAtt IngestFunction.Arn
+        RoleArn: !GetAtt IngestSchedulerRole.Arn
+        Input: '{}'
+        RetryPolicy:
+          MaximumEventAgeInSeconds: 86400
+          MaximumRetryAttempts: 185
+
+  Every15MinutesIngestSchedule:
+    Type: AWS::Scheduler::Schedule
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub ${AppName}-every-15-minutes
+      GroupName: default
+      Description: ''
+      State: DISABLED
+      ScheduleExpression: 'cron(15,30,45 * * * ? *)'
+      ScheduleExpressionTimezone: America/Toronto
+      FlexibleTimeWindow:
+        Mode: FLEXIBLE
+        MaximumWindowInMinutes: 10
+      Target:
+        Arn: !GetAtt IngestFunction.Arn
+        RoleArn: !GetAtt IngestSchedulerRole.Arn
+        RetryPolicy:
+          MaximumEventAgeInSeconds: 86400
+          MaximumRetryAttempts: 0
+
+  NightlyLogIndexerSchedule:
+    Type: AWS::Scheduler::Schedule
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub ${AppName}-nightly
+      GroupName: default
+      Description: ''
+      State: ENABLED
+      ScheduleExpression: 'cron(44 11 * * ? *)'
+      ScheduleExpressionTimezone: America/Toronto
+      FlexibleTimeWindow:
+        Mode: FLEXIBLE
+        MaximumWindowInMinutes: 240
+      Target:
+        Arn: !GetAtt LogIndexerFunction.Arn
+        RoleArn: !GetAtt LogIndexerSchedulerRole.Arn
+        Input: '{}'
+        RetryPolicy:
+          MaximumEventAgeInSeconds: 86400
+          MaximumRetryAttempts: 185
+
+Outputs:
+
+  KnowledgeBaseId:
+    Description: Bedrock Knowledge Base ID
+    Value: !Ref KnowledgeBase
+
+  ChatbotDistributionDomain:
+    Description: CloudFront domain for the chatbot frontend (CNAME this from your ChatbotAlias)
+    Value: !GetAtt ChatbotDistribution.DomainName
+
+  LogsDistributionDomain:
+    Description: CloudFront domain for the logs viewer (CNAME this from your LogsAlias)
+    Value: !GetAtt LogsDistribution.DomainName
+
+  RagNodeFunctionUrl:
+    Description: Function URL for the streaming RAG Node.js Lambda
+    Value: !GetAtt RagNodeFunctionUrl.FunctionUrl
+
+  DataBucketName:
+    Description: S3 bucket name (RAG data at /product-files, frontend at /front, logs at /logs)
+    Value: !Ref DataBucket
