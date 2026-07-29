@@ -1,0 +1,65 @@
+❯ how do i create the cert in us-east-1 from the cli                                                    
+
+● aws acm request-certificate \
+    --domain-name edge.example.com \
+    --validation-method DNS \
+    --region us-east-1 \
+    --profile bedrock-course
+
+  This returns a certificate ARN immediately, but the cert stays in PENDING_VALIDATION until you add the
+  DNS record. Get the CNAME to add:
+
+  aws acm describe-certificate \
+    --certificate-arn arn:aws:acm:us-east-1:ACCOUNT:certificate/CERT-ID \
+    --region us-east-1 \
+    --query 'Certificate.DomainValidationOptions[0].ResourceRecord'\
+    --profile bedrock-course
+
+  Add that CNAME to your DNS, then wait for it to flip to ISSUED (usually a few minutes):
+please provide the aws command to set up the cname in route53                                         
+
+● First, get your hosted zone ID:
+
+  aws route53 list-hosted-zones --query 'HostedZones[*].[Name,Id]' --output table --profile bedrock-course
+
+  Then create the CNAME (substitute the Name and Value from the describe-certificate output above):
+
+  aws route53 change-resource-record-sets \
+    --profile bedrock-course \
+    --hosted-zone-id Z1234567890ABC \
+    --change-batch '{
+      "Changes": [{
+        "Action": "UPSERT",
+        "ResourceRecordSet": {
+          "Name": "_abc123.edge.example.com.",
+          "Type": "CNAME",
+          "TTL": 300,
+          "ResourceRecords": [{"Value": "_xyz456.acm-validations.aws."}]
+        }
+      }]
+    }'
+
+  Use UPSERT (not CREATE) so it's safe to re-run. If both certs share the same hosted zone, you can add
+  both CNAMEs in one call by adding a second object to the Changes array.
+
+
+
+  aws acm wait certificate-validated \
+    --certificate-arn arn:aws:acm:us-east-1:ACCOUNT:certificate/CERT-ID \
+    --region us-east-1\
+    --profile bedrock-course
+
+  If the cert covers both ChatbotAlias and LogsAlias on the same domain, you can add
+  --subject-alternative-names knowledgebase-log.example.com to the first command and reuse one cert for
+  both parameters.
+
+
+# do this for each cloudwatch distribution
+
+ aws wafv2 create-web-acl \
+    --name jay-chat-logs-waf \
+    --scope CLOUDFRONT \
+    --default-action Allow={} \
+    --visibility-config SampledRequestsEnabled=true,CloudWatchMetricsEnabled=true,MetricName=jay-chat-logs-waf \
+    --region us-east-1 \
+    --profile bedrock-course

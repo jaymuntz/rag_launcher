@@ -21,10 +21,6 @@ Parameters:
     Type: String
     Description: S3 key for the ingest Lambda deployment package
 
-  RagFunctionS3Key:
-    Type: String
-    Description: S3 key for the RAG Python Lambda deployment package
-
   RagNodeFunctionS3Key:
     Type: String
     Description: S3 key for the RAG Node.js Lambda deployment package
@@ -73,17 +69,6 @@ Parameters:
     Description: >-
       Full ARN of the Secrets Manager secret for Google Sheets credentials
       used by the ingest Lambda (e.g. arn:aws:secretsmanager:us-east-1:ACCOUNT:secret:name-SUFFIX)
-
-  ApiGatewayExecuteArn:
-    Type: String
-    Default: ''
-    Description: >-
-      API Gateway execute ARN that is allowed to invoke the RAG Python function.
-      Leave blank to skip creating the permission.
-      Format: arn:aws:execute-api:REGION:ACCOUNT:API_ID/*/*/RESOURCE
-
-Conditions:
-  HasApiGatewayArn: !Not [!Equals [!Ref ApiGatewayExecuteArn, '']]
 
 Resources:
 
@@ -529,103 +514,6 @@ Resources:
           GOOGLE_SHEETS_SECRET_ARN: !Ref GoogleSheetsSecretArn
 
   # ============================================================
-  # Lambda — RAG Python (Python 3.12)
-  # ============================================================
-
-  RagFunctionBasicExecutionPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      ManagedPolicyName: !Sub AWSLambdaBasicExecutionRole-${AppName}-rag
-      Path: /service-role/
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Action: logs:CreateLogGroup
-            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
-          - Effect: Allow
-            Action:
-              - logs:CreateLogStream
-              - logs:PutLogEvents
-            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppName}-rag:*
-
-  RagFunctionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub ${AppName}-rag-role
-      Path: /service-role/
-      MaxSessionDuration: 3600
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - !Ref RagFunctionBasicExecutionPolicy
-      Policies:
-        - PolicyName: !Sub ${AppName}-lambda
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Sid: Statement1
-                Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                Resource: !Sub arn:aws:s3:::${DataBucket}/*
-              - Effect: Allow
-                Action:
-                  - bedrock:AgenticRetrieveStream
-                  - bedrock:Retrieve
-                  - bedrock:RetrieveAndGenerate
-                Resource: '*'
-
-  RagFunction:
-    Type: AWS::Lambda::Function
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      FunctionName: !Sub ${AppName}-rag
-      Description: ''
-      Runtime: python3.12
-      Handler: lambda_function.lambda_handler
-      Role: !GetAtt RagFunctionRole.Arn
-      Code:
-        S3Bucket: !Ref LambdaCodeS3Bucket
-        S3Key: !Ref RagFunctionS3Key
-      MemorySize: 128
-      Timeout: 300
-      PackageType: Zip
-      Architectures:
-        - x86_64
-      EphemeralStorage:
-        Size: 512
-      TracingConfig:
-        Mode: PassThrough
-      RuntimeManagementConfig:
-        UpdateRuntimeOn: Auto
-      LoggingConfig:
-        LogFormat: Text
-        LogGroup: !Sub /aws/lambda/${AppName}-rag
-      RecursiveLoop: Terminate
-      FileSystemConfigs: []
-      Environment:
-        Variables:
-          KNOWLEDGE_BASE_ID: !Ref KnowledgeBase
-          DATA_BUCKET: !Ref DataBucket
-
-  RagFunctionApiGatewayPermission:
-    Type: AWS::Lambda::Permission
-    Condition: HasApiGatewayArn
-    Properties:
-      FunctionName: !GetAtt RagFunction.Arn
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Ref ApiGatewayExecuteArn
-
-  # ============================================================
   # Lambda — RAG Node.js (nodejs24.x) with Function URL
   # ============================================================
 
@@ -727,7 +615,6 @@ Resources:
           - POST
         AllowHeaders:
           - content-type
-        ExposeHeaders: []
 
   # Allows public invocation via the function URL
   RagNodeFunctionUrlInvokePermission:
@@ -736,15 +623,6 @@ Resources:
       FunctionName: !GetAtt RagNodeFunction.Arn
       Action: lambda:InvokeFunctionUrl
       FunctionUrlAuthType: NONE
-      Principal: '*'
-
-  # Allows the function URL mechanism to call InvokeFunction internally
-  RagNodeFunctionInvokeViaUrlPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt RagNodeFunction.Arn
-      Action: lambda:InvokeFunction
-      InvokedViaFunctionUrl: true
       Principal: '*'
 
   # ============================================================
@@ -805,7 +683,7 @@ Resources:
     Properties:
       FunctionName: !Sub ${AppName}-rag-log-indexer
       Description: ''
-      Runtime: python3.14
+      Runtime: python3.13
       Handler: lambda_function.lambda_handler
       Role: !GetAtt LogIndexerFunctionRole.Arn
       Code:

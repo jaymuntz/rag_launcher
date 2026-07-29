@@ -1,0 +1,54 @@
+[
+  {
+    "ParameterKey": "AppName",
+    "ParameterValue": "jay-chat"
+  },
+  {
+    "ParameterKey": "LambdaCodeS3Bucket",
+    "ParameterValue": "jaymuntz-rag-lambdas"
+  },
+  {
+    "ParameterKey": "IngestFunctionS3Key",
+    "ParameterValue": "rag-ingest.zip"
+  },
+  {
+    "ParameterKey": "RagNodeFunctionS3Key",
+    "ParameterValue": "rag-node.zip"
+  },
+  {
+    "ParameterKey": "LogIndexerFunctionS3Key",
+    "ParameterValue": "rag-log-indexer.zip"
+  },
+  {
+    "ParameterKey": "ChatbotAlias",
+    "ParameterValue": "edge.jaymuntz.com"
+  },
+  {
+    "ParameterKey": "LogsAlias",
+    "ParameterValue": "chat-logs.jaymuntz.com"
+  },
+  {
+    "ParameterKey": "ChatbotAcmCertificateArn",
+    "ParameterValue": "arn:aws:acm:us-east-1:666781058351:certificate/fd50c195-0855-42d1-b9ab-94a89a6a3bab"
+  },
+  {
+    "ParameterKey": "LogsAcmCertificateArn",
+    "ParameterValue": "arn:aws:acm:us-east-1:666781058351:certificate/785deb68-cee5-42d9-9d7a-c95e8505e546"
+  },
+  {
+    "ParameterKey": "ChatbotWafAclArn",
+    "ParameterValue": "arn:aws:wafv2:us-east-1:666781058351:global/webacl/jay-chat-chatbot-waf/7d4aa692-6128-4110-954d-4d7882d6ccee"
+  },
+  {
+    "ParameterKey": "LogsWafAclArn",
+    "ParameterValue": "arn:aws:wafv2:us-east-1:666781058351:global/webacl/jay-chat-logs-waf/d2b4e41a-111d-4a48-a153-43039a5d8680"
+  },
+  {
+    "ParameterKey": "LogsBasicAuthBase64",
+    "ParameterValue": "amF5bXVudHo6c2xpcHAx"
+  },
+  {
+    "ParameterKey": "GoogleSheetsSecretArn",
+    "ParameterValue": "arn:aws:secretsmanager:us-east-1:666781058351:secret:dealersedge/google-sheets-credentials-4Y85n0"
+  }
+]
