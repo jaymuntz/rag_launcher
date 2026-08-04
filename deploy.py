@@ -527,7 +527,11 @@ def prompt_deployment_config(params):
     print("\n=== Deployment Configuration ===")
 
     current_stack = get_param(params, "AppName") or "parts-assistant"
-    stack_name = input(f"Stack name [{current_stack}]: ").strip() or current_stack
+    while True:
+        stack_name = input(f"Stack name [{current_stack}]: ").strip() or current_stack
+        if re.fullmatch(r'[a-z][a-z0-9-]{0,19}', stack_name):
+            break
+        print("  Stack name must be lowercase letters, numbers, and hyphens only, start with a letter, max 20 chars.")
 
     current_domain = _current_domain(params)
     default_use_domain = "Y" if current_domain else "N"
