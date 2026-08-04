@@ -21,48 +21,33 @@ Parameters:
     Type: String
     Description: S3 key for the RAG Node.js Lambda deployment package
 
-  LogIndexerFunctionS3Key:
-    Type: String
-    Description: S3 key for the log indexer Lambda deployment package
 
   RagSignerFunctionS3Key:
     Type: String
     Description: S3 key for the Lambda@Edge request-signing deployment package
 
+  RagSignerSuffix:
+    Type: String
+    Description: Short unique suffix appended to the signer function name to avoid collisions while Lambda@Edge replicas drain
+
   ChatbotAlias:
     Type: String
+    Default: ""
     Description: >-
-      Custom domain alias for the chatbot CloudFront distribution (e.g. edge.example.com).
-      Must match the ChatbotAcmCertificateArn certificate.
-
-  LogsAlias:
-    Type: String
-    Description: >-
-      Custom domain alias for the logs CloudFront distribution (e.g. knowledgebase-log.example.com).
-      Must match the LogsAcmCertificateArn certificate.
+      Custom domain alias for the chatbot CloudFront distribution (e.g. chat.example.com).
+      Leave blank to use the default CloudFront domain.
 
   ChatbotAcmCertificateArn:
     Type: String
-    Description: ACM certificate ARN (must be in us-east-1) covering the ChatbotAlias domain
-
-  LogsAcmCertificateArn:
-    Type: String
-    Description: ACM certificate ARN (must be in us-east-1) covering the LogsAlias domain
+    Default: ""
+    Description: ACM certificate ARN (must be in us-east-1) covering ChatbotAlias. Leave blank if not using a custom domain.
 
   ChatbotWafAclArn:
     Type: String
     Description: WAF Web ACL ARN for the chatbot CloudFront distribution
 
-  LogsWafAclArn:
-    Type: String
-    Description: WAF Web ACL ARN for the logs CloudFront distribution
-
-  LogsBasicAuthBase64:
-    Type: String
-    NoEcho: true
-    Description: >-
-      Base64-encoded "username:password" for the logs site basic-auth CloudFront function.
-      Generate with: echo -n "user:pass" | base64
+Conditions:
+  HasCustomDomain: !Not [!Equals [!Ref ChatbotAlias, ""]]
 
 Resources:
 
@@ -108,13 +93,11 @@ Resources:
               ArnLike:
                 AWS:SourceArn:
                   - !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${ChatbotDistribution}
-                  - !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${LogsDistribution}
           - Sid: AllowLambdaObjectAccess
             Effect: Allow
             Principal:
               AWS:
                 - !GetAtt RagNodeFunctionRole.Arn
-                - !GetAtt LogIndexerFunctionRole.Arn
             Action:
               - s3:GetObject
               - s3:PutObject
@@ -124,7 +107,6 @@ Resources:
             Principal:
               AWS:
                 - !GetAtt RagNodeFunctionRole.Arn
-                - !GetAtt LogIndexerFunctionRole.Arn
             Action: s3:ListBucket
             Resource: !Sub arn:aws:s3:::${DataBucket}
 
@@ -156,12 +138,16 @@ Resources:
         HttpVersion: http2
         IPV6Enabled: true
         PriceClass: PriceClass_All
-        Aliases:
-          - !Ref ChatbotAlias
-        ViewerCertificate:
-          MinimumProtocolVersion: TLSv1.2_2021
-          SslSupportMethod: sni-only
-          AcmCertificateArn: !Ref ChatbotAcmCertificateArn
+        Aliases: !If
+          - HasCustomDomain
+          - - !Ref ChatbotAlias
+          - !Ref AWS::NoValue
+        ViewerCertificate: !If
+          - HasCustomDomain
+          - MinimumProtocolVersion: TLSv1.2_2021
+            SslSupportMethod: sni-only
+            AcmCertificateArn: !Ref ChatbotAcmCertificateArn
+          - CloudFrontDefaultCertificate: true
         WebACLId: !Ref ChatbotWafAclArn
         Origins:
           - Id: s3-chatbot-origin
@@ -223,102 +209,6 @@ Resources:
           Items: []
 
   # ============================================================
-  # CloudFront — logs viewer (LogsAlias → /logs)
-  # ============================================================
-
-  LogsOriginAccessControl:
-    Type: AWS::CloudFront::OriginAccessControl
-    Properties:
-      OriginAccessControlConfig:
-        Name: !Sub ${AppName}-logs-oac
-        OriginAccessControlOriginType: s3
-        SigningBehavior: always
-        SigningProtocol: sigv4
-
-  LogsPasswordProtectFunction:
-    Type: AWS::CloudFront::Function
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      Name: !Sub ${AppName}-password-protect-logs
-      AutoPublish: true
-      FunctionConfig:
-        Comment: ''
-        Runtime: cloudfront-js-2.0
-      FunctionCode: !Sub |
-        function handler(event) {
-            var request = event.request;
-            var headers = request.headers;
-            var expectedAuth = 'Basic ${LogsBasicAuthBase64}';
-            if (headers.authorization && headers.authorization.value === expectedAuth) {
-                return request;
-            }
-            var response = {
-                statusCode: 401,
-                statusDescription: "Unauthorized",
-                headers: {
-                    "www-authenticate": { value: 'Basic realm="Secure Area"' }
-                }
-            };
-            return response;
-        }
-
-  LogsDistribution:
-    Type: AWS::CloudFront::Distribution
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      Tags:
-        - Key: Name
-          Value: !Sub ${AppName}-kb-log
-      DistributionConfig:
-        Comment: ''
-        DefaultRootObject: index.html
-        Enabled: true
-        HttpVersion: http2
-        IPV6Enabled: true
-        PriceClass: PriceClass_All
-        Aliases:
-          - !Ref LogsAlias
-        ViewerCertificate:
-          MinimumProtocolVersion: TLSv1.2_2021
-          SslSupportMethod: sni-only
-          AcmCertificateArn: !Ref LogsAcmCertificateArn
-        WebACLId: !Ref LogsWafAclArn
-        Origins:
-          - Id: s3-logs-origin
-            DomainName: !Sub ${DataBucket}.s3.amazonaws.com
-            OriginPath: /logs
-            OriginAccessControlId: !GetAtt LogsOriginAccessControl.Id
-            S3OriginConfig:
-              OriginAccessIdentity: ''
-        DefaultCacheBehavior:
-          TargetOriginId: s3-logs-origin
-          ViewerProtocolPolicy: redirect-to-https
-          Compress: true
-          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
-          AllowedMethods:
-            - HEAD
-            - GET
-          CachedMethods:
-            - HEAD
-            - GET
-          FunctionAssociations:
-            - FunctionARN: !GetAtt LogsPasswordProtectFunction.FunctionARN
-              EventType: viewer-request
-          LambdaFunctionAssociations: []
-          TrustedSigners: []
-          TrustedKeyGroups: []
-          FieldLevelEncryptionId: ''
-          SmoothStreaming: false
-        Restrictions:
-          GeoRestriction:
-            RestrictionType: none
-            Locations: []
-        CacheBehaviors: []
-        CustomErrorResponses: []
-        OriginGroups:
-          Quantity: 0
           Items: []
 
   # ============================================================
@@ -565,7 +455,7 @@ Resources:
   RagSignerFunctionBasicExecutionPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub AWSLambdaBasicExecutionRole-${AppName}-rag-signer
+      ManagedPolicyName: !Sub AWSLambdaBasicExecutionRole-${AppName}-rag-signer-${RagSignerSuffix}
       Path: /service-role/
       PolicyDocument:
         Version: '2012-10-17'
@@ -580,7 +470,7 @@ Resources:
   RagSignerFunctionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub ${AppName}-rag-signer-role
+      RoleName: !Sub ${AppName}-rag-signer-${RagSignerSuffix}-role
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -592,19 +482,28 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - !Ref RagSignerFunctionBasicExecutionPolicy
+      Policies:
+        - PolicyName: invoke-rag-node
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt RagNodeFunction.Arn
 
   RagSignerFunction:
     Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
     Properties:
-      FunctionName: !Sub ${AppName}-rag-signer
-      Runtime: nodejs18.x
+      FunctionName: !Sub ${AppName}-rag-signer-${RagSignerSuffix}
+      Runtime: nodejs22.x
       Handler: index.handler
       Role: !GetAtt RagSignerFunctionRole.Arn
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref RagSignerFunctionS3Key
-      Timeout: 5
-      MemorySize: 128
+      Timeout: 30
+      MemorySize: 256
 
   RagSignerFunctionVersion:
     Type: AWS::Lambda::Version
@@ -612,152 +511,6 @@ Resources:
       FunctionName: !Ref RagSignerFunction
       Description: !Sub "Signer for ${AppName} — key ${RagSignerFunctionS3Key}"
 
-  # ============================================================
-  # Lambda — Log Indexer (Python 3.14)
-  # ============================================================
-
-  LogIndexerFunctionBasicExecutionPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      ManagedPolicyName: !Sub AWSLambdaBasicExecutionRole-${AppName}-rag-log-indexer
-      Path: /service-role/
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Action: logs:CreateLogGroup
-            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
-          - Effect: Allow
-            Action:
-              - logs:CreateLogStream
-              - logs:PutLogEvents
-            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppName}-rag-log-indexer:*
-
-  LogIndexerFunctionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub ${AppName}-rag-log-indexer-role
-      Path: /service-role/
-      MaxSessionDuration: 3600
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - !Ref LogIndexerFunctionBasicExecutionPolicy
-      Policies:
-        - PolicyName: !Sub ${AppName}-rag-log-indexer
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Sid: VisualEditor0
-                Effect: Allow
-                Action:
-                  - s3:PutObject
-                  - s3:GetObject
-                  - s3:ListBucket
-                Resource:
-                  - !Sub arn:aws:s3:::${DataBucket}/*
-                  - !Sub arn:aws:s3:::${DataBucket}
-
-  LogIndexerFunction:
-    Type: AWS::Lambda::Function
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      FunctionName: !Sub ${AppName}-rag-log-indexer
-      Description: ''
-      Runtime: python3.13
-      Handler: lambda_function.lambda_handler
-      Role: !GetAtt LogIndexerFunctionRole.Arn
-      Code:
-        S3Bucket: !Ref LambdaCodeS3Bucket
-        S3Key: !Ref LogIndexerFunctionS3Key
-      MemorySize: 128
-      Timeout: 300
-      PackageType: Zip
-      Architectures:
-        - x86_64
-      EphemeralStorage:
-        Size: 512
-      TracingConfig:
-        Mode: PassThrough
-      RuntimeManagementConfig:
-        UpdateRuntimeOn: Auto
-      LoggingConfig:
-        LogFormat: Text
-        LogGroup: !Sub /aws/lambda/${AppName}-rag-log-indexer
-      RecursiveLoop: Terminate
-      FileSystemConfigs: []
-      Environment:
-        Variables:
-          DATA_BUCKET: !Ref DataBucket
-
-  # Dedicated scheduler execution role for the log indexer nightly run.
-  # The original export reused the Lambda's own role here, which lacked
-  # lambda:InvokeFunction — this dedicated role is the correct pattern.
-  LogIndexerSchedulerExecutionPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      ManagedPolicyName: !Sub ${AppName}-log-indexer-scheduler-policy
-      Path: /service-role/
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Action:
-              - lambda:InvokeFunction
-            Resource:
-              - !GetAtt LogIndexerFunction.Arn
-              - !Sub ${LogIndexerFunction.Arn}:*
-
-  LogIndexerSchedulerRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub ${AppName}-log-indexer-scheduler-role
-      Path: /service-role/
-      MaxSessionDuration: 3600
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: scheduler.amazonaws.com
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals:
-                aws:SourceAccount: !Ref AWS::AccountId
-      ManagedPolicyArns:
-        - !Ref LogIndexerSchedulerExecutionPolicy
-
-  # NOTE: The "default" schedule group is auto-created in every AWS account/region.
-  # Omitting it here to avoid stack failures if it already exists.
-  # The schedules below reference it by name ("default"), which is always valid.
-
-  NightlyLogIndexerSchedule:
-    Type: AWS::Scheduler::Schedule
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      Name: !Sub ${AppName}-nightly
-      GroupName: default
-      Description: ''
-      State: ENABLED
-      ScheduleExpression: 'cron(44 11 * * ? *)'
-      ScheduleExpressionTimezone: America/Toronto
-      FlexibleTimeWindow:
-        Mode: FLEXIBLE
-        MaximumWindowInMinutes: 240
-      Target:
-        Arn: !GetAtt LogIndexerFunction.Arn
-        RoleArn: !GetAtt LogIndexerSchedulerRole.Arn
-        Input: '{}'
-        RetryPolicy:
-          MaximumEventAgeInSeconds: 86400
-          MaximumRetryAttempts: 185
 
 Outputs:
 
@@ -769,14 +522,10 @@ Outputs:
     Description: CloudFront domain for the chatbot frontend (CNAME this from your ChatbotAlias)
     Value: !GetAtt ChatbotDistribution.DomainName
 
-  LogsDistributionDomain:
-    Description: CloudFront domain for the logs viewer (CNAME this from your LogsAlias)
-    Value: !GetAtt LogsDistribution.DomainName
-
   RagNodeFunctionUrl:
     Description: Function URL for the streaming RAG Node.js Lambda
     Value: !GetAtt RagNodeFunctionUrl.FunctionUrl
 
   DataBucketName:
-    Description: S3 bucket name (RAG data at /knowledgebase-files, frontend at /front, logs at /logs)
+    Description: S3 bucket name (RAG data at /knowledgebase-files, frontend at /front)
     Value: !Ref DataBucket

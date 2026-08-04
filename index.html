@@ -6,7 +6,6 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         * { box-sizing: border-box; }
-        html { overflow: hidden; }
         body {
             background: #000;
             color: #fff;
@@ -14,7 +13,6 @@
             font-size: 18px;
             margin: 0;
             padding: 40px 20px;
-            overflow-y: hidden;
         }
         #app {
             max-width: 900px;
@@ -78,48 +76,6 @@
         .bot-content code { background: #222; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
         .bot-content pre { background: #222; padding: 8px; border-radius: 4px; overflow-x: auto; }
         .bot-content pre code { background: none; padding: 0; }
-        .citation-unknown { font-size: 0.85em; vertical-align: super; color: #ff6b35; cursor: help; }
-        .citation-wrap { position: relative; display: inline-block; }
-        .citation-wrap a { font-size: 0.85em; vertical-align: super; color: #00e5b0; }
-        .citation-tooltip {
-            display: none;
-            position: absolute;
-            bottom: calc(100% + 6px);
-            left: 50%;
-            transform: translateX(-50%);
-            background: #222;
-            color: #f0f0f0;
-            padding: 10px 13px;
-            border-radius: 7px;
-            font-size: 0.82em;
-            width: 300px;
-            z-index: 200;
-            box-shadow: 0 3px 12px rgba(0,0,0,0.35);
-            word-wrap: break-word;
-            line-height: 1.45;
-        }
-        .citation-wrap:hover .citation-tooltip { display: inline-block; }
-        .citation-wrap::before {
-            content: '';
-            position: absolute;
-            bottom: 100%;
-            left: 0;
-            right: 0;
-            height: 6px;
-        }
-        .citation-tooltip::after {
-            content: '';
-            position: absolute;
-            top: 100%;
-            left: 50%;
-            transform: translateX(-50%);
-            border: 6px solid transparent;
-            border-top-color: #222;
-        }
-        .ct-title { font-weight: bold; margin-bottom: 5px; color: #fff; display: block; }
-        .ct-url { color: #7ecfff; font-size: 0.9em; margin-bottom: 5px; word-break: break-all; }
-        .ct-summary { margin-bottom: 5px; color: #ddd; }
-        .ct-filetype { color: #aaa; font-size: 0.88em; }
         .streaming-cursor::after {
             content: '▋';
             animation: blink 0.7s step-end infinite;
@@ -150,21 +106,8 @@
 
         const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-        function renderAnswer(answer, sources) {
-            const raw = answer
-                .replace(/\[(\d+)\]/g, '<cite data-n="$1"></cite>')
-                .replace(/\[\?\]/g, '<span class="citation-unknown" title="Missing source metadata">[?]</span>');
-            return marked.parse(raw).replace(/<cite data-n="(\d+)"><\/cite>/g, (match, num) => {
-                const src = sources[parseInt(num) - 1];
-                if (!src || !src.productUrl) return match;
-                const title = src.title
-                    ? `<span class="ct-title"><a href="${esc(src.productUrl)}" target="_blank" style="color:#7ecfff;text-decoration:underline;">${esc(src.title)}</a></span>`
-                    : '';
-                const image = src.productImage
-                    ? `<span style="display:block;margin-top:6px;"><img src="${esc(src.productImage)}" style="max-width:100%;max-height:120px;object-fit:contain;border-radius:4px;"></span>`
-                    : '';
-                return `<span class="citation-wrap"><a href="${esc(src.productUrl)}" target="_blank">[${num}]</a><span class="citation-tooltip">${title}${image}</span></span>`;
-            });
+        function renderAnswer(answer) {
+            return marked.parse(answer.replace(/\[[\d?]+\]/g, ''));
         }
 
         function setInputsDisabled(disabled) {
@@ -227,7 +170,7 @@
                             contentDiv.innerHTML = marked.parse(streamedText);
                         } else if (evt.type === "done") {
                             contentDiv.classList.remove("streaming-cursor");
-                            contentDiv.innerHTML = renderAnswer(evt.answer, evt.sources || []);
+                            contentDiv.innerHTML = renderAnswer(evt.answer);
                         } else if (evt.type === "error") {
                             contentDiv.classList.remove("streaming-cursor");
                             contentDiv.innerHTML = `<span style="color:red">${esc(evt.message)}</span>`;

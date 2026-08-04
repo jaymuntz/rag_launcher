@@ -1,7 +1,7 @@
 [
   {
     "ParameterKey": "AppName",
-    "ParameterValue": "genious-jay"
+    "ParameterValue": "barky4"
   },
   {
     "ParameterKey": "LambdaCodeS3Bucket",
@@ -12,39 +12,23 @@
     "ParameterValue": "rag-node.zip"
   },
   {
-    "ParameterKey": "LogIndexerFunctionS3Key",
-    "ParameterValue": "rag-log-indexer.zip"
-  },
-  {
     "ParameterKey": "RagSignerFunctionS3Key",
     "ParameterValue": "rag-signer.zip"
   },
   {
-    "ParameterKey": "ChatbotAlias",
-    "ParameterValue": "genious-jay.jaymuntz.com"
+    "ParameterKey": "RagSignerSuffix",
+    "ParameterValue": "06672"
   },
   {
-    "ParameterKey": "LogsAlias",
-    "ParameterValue": "genious-jay-logs.jaymuntz.com"
+    "ParameterKey": "ChatbotAlias",
+    "ParameterValue": "barky4.jaymuntz.com"
   },
   {
     "ParameterKey": "ChatbotAcmCertificateArn",
-    "ParameterValue": "arn:aws:acm:us-east-1:666781058351:certificate/1afd78ee-4cb4-44db-a513-bd1dd42b6d10"
-  },
-  {
-    "ParameterKey": "LogsAcmCertificateArn",
-    "ParameterValue": "arn:aws:acm:us-east-1:666781058351:certificate/23bda811-48c6-4dc8-9c47-4087a9bd90e8"
+    "ParameterValue": "arn:aws:acm:us-east-1:666781058351:certificate/747a6d17-9f00-4e3a-b236-66227eed0a6e"
   },
   {
     "ParameterKey": "ChatbotWafAclArn",
-    "ParameterValue": "arn:aws:wafv2:us-east-1:666781058351:global/webacl/genious-jay-chatbot-waf/65f54d20-bf20-430e-9574-d08bcac93494"
-  },
-  {
-    "ParameterKey": "LogsWafAclArn",
-    "ParameterValue": "arn:aws:wafv2:us-east-1:666781058351:global/webacl/genious-jay-logs-waf/e7311b49-8218-412c-bc61-c6bc7a44d948"
-  },
-  {
-    "ParameterKey": "LogsBasicAuthBase64",
-    "ParameterValue": "amF5bXVudHo6c2xpcHAx"
+    "ParameterValue": "arn:aws:wafv2:us-east-1:666781058351:global/webacl/barky4-chatbot-waf/8e8ab43d-636a-4d9b-8cd3-3c6dd707270d"
   }
 ]

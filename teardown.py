@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, WaiterError
 
 PARAMETERS_FILE = "parameters.json"
 
@@ -69,7 +69,6 @@ def get_stack_resources(cfn, stack_name):
 def delete_route53_cnames(route53, params, outputs):
     for alias_key, output_key in [
         ("ChatbotAlias", "ChatbotDistributionDomain"),
-        ("LogsAlias",    "LogsDistributionDomain"),
     ]:
         alias     = get_param(params, alias_key)
         cf_domain = outputs.get(output_key)
@@ -180,25 +179,51 @@ def delete_stack(cfn, stack_name):
     cfn.delete_stack(StackName=stack_name)
     print(f"  Waiting for stack deletion...")
     waiter = cfn.get_waiter("stack_delete_complete")
-    waiter.wait(StackName=stack_name, WaiterConfig={"Delay": 15, "MaxAttempts": 80})
-    print(f"  Stack deleted")
+    try:
+        waiter.wait(StackName=stack_name, WaiterConfig={"Delay": 15, "MaxAttempts": 80})
+        print(f"  Stack deleted")
+    except WaiterError:
+        # Fetch the actual stack status and failed resource reasons
+        try:
+            resp = cfn.describe_stacks(StackName=stack_name)
+            status = resp["Stacks"][0]["StackStatus"]
+        except ClientError:
+            status = "UNKNOWN"
+
+        if status == "DELETE_FAILED":
+            failed = []
+            try:
+                paginator = cfn.get_paginator("list_stack_resources")
+                for page in paginator.paginate(StackName=stack_name):
+                    for r in page["StackResourceSummaries"]:
+                        if r["ResourceStatus"] == "DELETE_FAILED":
+                            failed.append(
+                                f"    {r['LogicalResourceId']} ({r['ResourceType']}): "
+                                f"{r.get('ResourceStatusReason', 'no reason given')}"
+                            )
+            except ClientError:
+                pass
+
+            print(f"\n  WARNING: Stack is in DELETE_FAILED state. Some resources could not be deleted:")
+            for line in failed:
+                print(line)
+
+            lambda_edge_stuck = any("replicated function" in f for f in failed)
+            if lambda_edge_stuck:
+                print(
+                    "\n  NOTE: Lambda@Edge functions cannot be deleted while CloudFront replicas still exist."
+                    "\n  AWS automatically removes replicas over the next 1-2 hours."
+                    "\n  After waiting, delete the stuck function(s) manually, then re-run teardown"
+                    "\n  or delete the stack again via the AWS Console."
+                )
+            print(f"\n  Continuing teardown of remaining resources...\n")
+        else:
+            raise
 
 
 # ---------------------------------------------------------------------------
 # Step 5: Delete retained resources
 # ---------------------------------------------------------------------------
-
-def delete_cloudfront_function(cf, name):
-    try:
-        resp = cf.describe_function(Name=name)
-        etag = resp["ETag"]
-        cf.delete_function(Name=name, IfMatch=etag)
-        print(f"  Deleted CloudFront function {name}")
-    except ClientError as e:
-        if "NoSuchFunctionExists" in str(e):
-            print(f"  CloudFront function {name} not found, skipping")
-        else:
-            raise
 
 
 def delete_lambda_function(lam, name):
@@ -208,19 +233,15 @@ def delete_lambda_function(lam, name):
     except ClientError as e:
         if "ResourceNotFoundException" in str(e):
             print(f"  Lambda {name} not found, skipping")
+        elif "replicated function" in str(e):
+            print(
+                f"  WARNING: Cannot delete Lambda {name} — it is a Lambda@Edge function with"
+                f" replicas still being removed by AWS. Wait 1-2 hours, then run:\n"
+                f"    aws lambda delete-function --function-name {name} --region us-east-1 --profile bedrock-course"
+            )
         else:
             raise
 
-
-def delete_schedule(scheduler, name):
-    try:
-        scheduler.delete_schedule(Name=name)
-        print(f"  Deleted schedule {name}")
-    except ClientError as e:
-        if "ResourceNotFoundException" in str(e):
-            print(f"  Schedule {name} not found, skipping")
-        else:
-            raise
 
 
 def delete_bedrock_resources(bedrock, kb_id, ds_id):
@@ -341,7 +362,6 @@ def main():
     route53   = sess.client("route53")
     s3        = sess.client("s3")
     lam       = sess.client("lambda")
-    scheduler = sess.client("scheduler")
     bedrock   = sess.client("bedrock-agent")
     wafv2     = sess.client("wafv2",  region_name="us-east-1")
     acm       = sess.client("acm",    region_name="us-east-1")
@@ -353,7 +373,6 @@ def main():
     res = get_stack_resources(cfn, stack_name)
 
     chatbot_dist_id = res.get("ChatbotDistribution")
-    logs_dist_id    = res.get("LogsDistribution")
     kb_id           = res.get("KnowledgeBase")
     ds_physical     = res.get("KnowledgeBaseDataSource", "")
     # DataSource physical ID is "knowledgeBaseId|dataSourceId"
@@ -370,40 +389,34 @@ def main():
     print("\n=== Step 1: Route53 CNAMEs ===")
     delete_route53_cnames(route53, params, outputs)
 
-    print("\n=== Step 2: Disable CloudFront distributions ===")
+    print("\n=== Step 2: Disable CloudFront distribution ===")
     if chatbot_dist_id:
         disable_distribution(cf, chatbot_dist_id)
-    if logs_dist_id:
-        disable_distribution(cf, logs_dist_id)
 
-    print("\n=== Step 3: Delete CloudFront distributions ===")
+    print("\n=== Step 3: Delete CloudFront distribution ===")
     wait_and_delete_distribution(cf, chatbot_dist_id)
-    wait_and_delete_distribution(cf, logs_dist_id)
 
     print("\n=== Step 4: Delete CloudFormation stack ===")
     delete_stack(cfn, stack_name)
 
     print("\n=== Step 5: Delete retained resources ===")
-    delete_cloudfront_function(cf, f"{app}-password-protect-logs")
-
     delete_lambda_function(lam, f"{app}-rag-node")
-    delete_lambda_function(lam, f"{app}-rag-log-indexer")
-    delete_lambda_function(lam, f"{app}-rag-signer")
-
-    delete_schedule(scheduler, f"{app}-nightly")
+    signer_suffix = get_param(params, "RagSignerSuffix")
+    if signer_suffix:
+        delete_lambda_function(lam, f"{app}-rag-signer-{signer_suffix}")
+    else:
+        print("  No RagSignerSuffix in parameters.json, skipping signer deletion")
 
     delete_bedrock_resources(bedrock, kb_id, ds_id)
 
     bucket_name = res.get("DataBucket", f"{app}-rag-chatbot-data")
     empty_and_delete_bucket(s3, bucket_name)
 
-    print("\n=== Step 6: Delete WAF ACLs ===")
+    print("\n=== Step 6: Delete WAF ACL ===")
     delete_waf_acl(wafv2, get_param(params, "ChatbotWafAclArn"))
-    delete_waf_acl(wafv2, get_param(params, "LogsWafAclArn"))
 
-    print("\n=== Step 7: Delete ACM certificates ===")
+    print("\n=== Step 7: Delete ACM certificate ===")
     delete_certificate(acm, get_param(params, "ChatbotAcmCertificateArn"))
-    delete_certificate(acm, get_param(params, "LogsAcmCertificateArn"))
 
     print("\nDone. The Lambda code bucket was left intact.")
 

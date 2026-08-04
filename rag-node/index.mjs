@@ -1,9 +1,9 @@
 import { BedrockAgentRuntimeClient, RetrieveCommand } from "@aws-sdk/client-bedrock-agent-runtime";
 import { BedrockRuntimeClient, ConverseStreamCommand } from "@aws-sdk/client-bedrock-runtime";
-import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 
 const KB_ID = process.env.KNOWLEDGE_BASE_ID;
-const LOG_BUCKET = process.env.DATA_BUCKET;
+const DATA_BUCKET = process.env.DATA_BUCKET;
 const MODEL_ID = "us.anthropic.claude-sonnet-4-6";
 
 const s3 = new S3Client({});
@@ -11,7 +11,7 @@ const bedrockAgent = new BedrockAgentRuntimeClient({});
 const bedrockRuntime = new BedrockRuntimeClient({});
 
 // Cold-start: load system prompt from S3
-const { Body } = await s3.send(new GetObjectCommand({ Bucket: LOG_BUCKET, Key: "system_prompt.txt" }));
+const { Body } = await s3.send(new GetObjectCommand({ Bucket: DATA_BUCKET, Key: "system_prompt.txt" }));
 const SYSTEM_PROMPT = await Body.transformToString();
 
 function getSourceMetadata(result) {
@@ -97,26 +97,6 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream,
     }
 
     send({ type: "done", answer: streamedText, sources: uniqueSources });
-
-    // Best-effort S3 audit log
-    try {
-      const now = new Date();
-      const datePath = now.toISOString().slice(0, 10).replace(/-/g, "/");
-      await s3.send(new PutObjectCommand({
-        Bucket: LOG_BUCKET,
-        Key: `logs/${datePath}/${context.awsRequestId}.json`,
-        Body: JSON.stringify({
-          timestamp: now.toISOString(),
-          requestId: context.awsRequestId,
-          question: userQuery,
-          answer: streamedText,
-          sources: uniqueSources,
-        }),
-        ContentType: "application/json",
-      }));
-    } catch (e) {
-      console.error("S3 log failed:", e.message);
-    }
   } catch (err) {
     console.error("Error:", err);
     send({ type: "error", message: err.message });

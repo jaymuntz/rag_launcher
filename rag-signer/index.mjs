@@ -2,7 +2,7 @@ import { createHmac, createHash } from 'crypto';
 import { request as httpsRequest } from 'https';
 
 const REGION = 'us-east-1';
-const FUNC_NAME = 'genious-jay-rag-node';
+const FUNC_NAME = '__APP_NAME__-rag-node';
 
 function hmac(key, msg) {
   return createHmac('sha256', typeof key === 'string' ? Buffer.from(key, 'utf-8') : key)

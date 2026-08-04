@@ -12,13 +12,12 @@ Steps:
 """
 
 import argparse
-import base64
-import getpass
 import json
 import re
 import subprocess
 import sys
 import time
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -214,9 +213,9 @@ def build_and_upload_lambdas(s3, params):
         print(f"  Creating S3 bucket {bucket}")
         s3.create_bucket(Bucket=bucket)
 
-    _upload_zip(s3, bucket, "rag-node.zip",        _build_node)
-    _upload_zip(s3, bucket, "rag-log-indexer.zip", _build_log_indexer)
-    _upload_zip(s3, bucket, "rag-signer.zip",      _build_signer)
+    app = get_param(params, "AppName")
+    _upload_zip(s3, bucket, "rag-node.zip",   _build_node)
+    _upload_zip(s3, bucket, "rag-signer.zip", lambda p: _build_signer(p, app))
 
 
 def _upload_zip(s3, bucket, key, build_fn):
@@ -236,18 +235,13 @@ def _build_node(zip_path):
                 zf.write(f, f.relative_to(src))
 
 
-def _build_log_indexer(zip_path):
-    src = BASE_DIR / "rag-log-indexer"
-    print(f"  Building rag-log-indexer.zip")
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(src / "lambda_function.py", "lambda_function.py")
 
-
-def _build_signer(zip_path):
+def _build_signer(zip_path, app_name):
     src = BASE_DIR / "rag-signer"
-    print(f"  Building rag-signer.zip")
+    print(f"  Building rag-signer.zip (app: {app_name})")
+    code = (src / "index.mjs").read_text().replace("__APP_NAME__", app_name)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(src / "index.mjs", "index.mjs")
+        zf.writestr("index.mjs", code)
 
 
 # ---------------------------------------------------------------------------
@@ -298,8 +292,8 @@ def preflight_check(session, params, profile):
     except ClientError:
         pass
 
-    # Lambda functions
-    for fn_name in [f"{app}-rag-node", f"{app}-rag-log-indexer", f"{app}-rag-signer"]:
+    # Lambda functions (rag-signer excluded — suffix makes each deploy's name unique)
+    for fn_name in [f"{app}-rag-node", f"{app}-rag-log-indexer"]:
         try:
             lam.get_function(FunctionName=fn_name)
             warn("Lambda function", fn_name,
@@ -439,8 +433,8 @@ def upload_frontend(s3, stack_name, params, sess):
         print("  DataBucketName not in stack outputs, skipping frontend upload")
         return
 
-    chatbot_alias = get_param(params, "ChatbotAlias") or stack_name
-    api_url = f"https://{chatbot_alias}/api"
+    chatbot_alias = get_param(params, "ChatbotAlias")
+    api_url = f"https://{chatbot_alias or outputs.get('ChatbotDistributionDomain', stack_name)}/api"
 
     html = html_path.read_text(encoding="utf-8")
     html = re.sub(r"<title>[^<]*</title>",   f"<title>{stack_name}</title>",  html)
@@ -455,6 +449,30 @@ def upload_frontend(s3, stack_name, params, sess):
     )
     print(f"  Uploaded index.html → s3://{bucket}/front/index.html")
 
+    favicon_path = BASE_DIR / "favicon.ico"
+    if favicon_path.exists():
+        s3.put_object(
+            Bucket=bucket,
+            Key="front/favicon.ico",
+            Body=favicon_path.read_bytes(),
+            ContentType="image/x-icon",
+        )
+        print(f"  Uploaded favicon.ico → s3://{bucket}/front/favicon.ico")
+    else:
+        print(f"  favicon.ico not found at {favicon_path}, skipping")
+
+    prompt_path = BASE_DIR / "system_prompt.txt"
+    if prompt_path.exists():
+        s3.put_object(
+            Bucket=bucket,
+            Key="system_prompt.txt",
+            Body=prompt_path.read_bytes(),
+            ContentType="text/plain",
+        )
+        print(f"  Uploaded system_prompt.txt → s3://{bucket}/system_prompt.txt")
+    else:
+        print(f"  system_prompt.txt not found at {prompt_path}, skipping")
+
 
 # ---------------------------------------------------------------------------
 # Step 7: Post-deploy Route53 CNAMEs
@@ -467,7 +485,6 @@ def post_deploy_dns(session, route53, params, stack_name):
 
     for alias_key, output_key in [
         ("ChatbotAlias", "ChatbotDistributionDomain"),
-        ("LogsAlias", "LogsDistributionDomain"),
     ]:
         alias = get_param(params, alias_key)
         cf_domain = outputs.get(output_key)
@@ -505,54 +522,34 @@ def _current_domain(params):
     return parts[1] if len(parts) > 1 else ""
 
 
-def _decode_logs_credentials(params):
-    encoded = get_param(params, "LogsBasicAuthBase64") or ""
-    try:
-        decoded = base64.b64decode(encoded).decode("utf-8")
-        if ":" in decoded:
-            user, pw = decoded.split(":", 1)
-            return user, pw
-    except Exception:
-        pass
-    return "", ""
-
-
 def prompt_deployment_config(params):
-    """Prompt for deployment settings, update params in-place, and return (stack_name, kb_files)."""
+    """Prompt for deployment settings, update params in-place, and return (stack_name, kb_files, use_custom_domain)."""
     print("\n=== Deployment Configuration ===")
 
     current_stack = get_param(params, "AppName") or "parts-assistant"
     stack_name = input(f"Stack name [{current_stack}]: ").strip() or current_stack
 
     current_domain = _current_domain(params)
-    domain = input(f"Domain [{current_domain}]: ").strip() or current_domain
+    default_use_domain = "Y" if current_domain else "N"
+    use_domain_input = input(f"Use custom Route53 domain? [{default_use_domain}]: ").strip().upper() or default_use_domain
+    use_custom_domain = use_domain_input == "Y"
 
-    current_user, _ = _decode_logs_credentials(params)
-    logs_user = input(f"Logs username [{current_user}]: ").strip() or current_user
-    logs_pass = getpass.getpass("Logs password (Enter to keep existing): ")
-    if logs_pass:
-        logs_b64 = base64.b64encode(f"{logs_user}:{logs_pass}".encode()).decode()
+    if use_custom_domain:
+        domain = input(f"Domain [{current_domain}]: ").strip() or current_domain
+        new_chatbot_alias = f"{stack_name}.{domain}"
+        if new_chatbot_alias != get_param(params, "ChatbotAlias"):
+            set_param(params, "ChatbotAcmCertificateArn", SENTINEL)
     else:
-        logs_b64 = get_param(params, "LogsBasicAuthBase64")
+        new_chatbot_alias = ""
+        set_param(params, "ChatbotAcmCertificateArn", "")
 
     kb_files = input("Knowledge base files directory (Enter to skip): ").strip() or None
 
-    new_chatbot_alias = f"{stack_name}.{domain}"
-    new_logs_alias    = f"{stack_name}-logs.{domain}"
-
-    # Reset cert ARNs if the domain changed so deploy.py requests new ones
-    if new_chatbot_alias != get_param(params, "ChatbotAlias"):
-        set_param(params, "ChatbotAcmCertificateArn", SENTINEL)
-    if new_logs_alias != get_param(params, "LogsAlias"):
-        set_param(params, "LogsAcmCertificateArn", SENTINEL)
-
-    set_param(params, "AppName",            stack_name)
-    set_param(params, "ChatbotAlias",       new_chatbot_alias)
-    set_param(params, "LogsAlias",          new_logs_alias)
-    set_param(params, "LogsBasicAuthBase64", logs_b64)
+    set_param(params, "AppName",      stack_name)
+    set_param(params, "ChatbotAlias", new_chatbot_alias)
     save_params(params)
 
-    return stack_name, kb_files
+    return stack_name, kb_files, use_custom_domain
 
 
 # ---------------------------------------------------------------------------
@@ -569,7 +566,7 @@ def main():
     region  = args.region
 
     params = load_params()
-    stack_name, kb_files = prompt_deployment_config(params)
+    stack_name, kb_files, use_custom_domain = prompt_deployment_config(params)
 
     sess    = boto3.Session(profile_name=profile, region_name=region)
 
@@ -578,19 +575,25 @@ def main():
     route53 = sess.client("route53")
     s3      = sess.client("s3",     region_name="us-east-1")
 
-    print("\n=== Step 1: ACM Certificates ===")
-    ensure_certificate(acm, route53, params, "ChatbotAlias", "ChatbotAcmCertificateArn")
-    ensure_certificate(acm, route53, params, "LogsAlias",    "LogsAcmCertificateArn")
+    if use_custom_domain:
+        print("\n=== Step 1: ACM Certificates ===")
+        ensure_certificate(acm, route53, params, "ChatbotAlias", "ChatbotAcmCertificateArn")
+    else:
+        print("\n=== Step 1: ACM Certificates (skipped — no custom domain) ===")
 
     print("\n=== Step 2: WAF Web ACLs ===")
     ensure_waf_acl(wafv2, params, "chatbot-waf", "ChatbotWafAclArn")
-    ensure_waf_acl(wafv2, params, "logs-waf",    "LogsWafAclArn")
 
     print("\n=== Step 3: Lambda packages ===")
     build_and_upload_lambdas(s3, params)
 
     print("\n=== Step 4: Pre-flight check ===")
     preflight_check(sess, params, profile)
+
+    signer_suffix = uuid.uuid4().hex[:5]
+    set_param(params, "RagSignerSuffix", signer_suffix)
+    save_params(params)
+    print(f"  Signer suffix: {signer_suffix}")
 
     print("\n=== Step 5: Deploy CloudFormation stack ===")
     deploy_stack(profile, region, stack_name)
@@ -602,10 +605,19 @@ def main():
         print("\n=== Step 7: Upload knowledge base files ===")
         upload_kb_files(s3, kb_files, stack_name, sess)
 
-    print("\n=== Step 8: Post-deploy DNS ===")
-    post_deploy_dns(sess, route53, params, stack_name)
+    if use_custom_domain:
+        print("\n=== Step 8: Post-deploy DNS ===")
+        post_deploy_dns(sess, route53, params, stack_name)
+    else:
+        print("\n=== Step 8: Post-deploy DNS (skipped — no custom domain) ===")
 
-    print("\nDone.")
+    # Print the live URLs so the user knows where to find the deployment
+    cfn = sess.client("cloudformation")
+    outputs = {o["OutputKey"]: o["OutputValue"]
+               for o in cfn.describe_stacks(StackName=stack_name)["Stacks"][0].get("Outputs", [])}
+    chatbot_url = f"https://{get_param(params, 'ChatbotAlias')}" if use_custom_domain else f"https://{outputs.get('ChatbotDistributionDomain', '')}"
+    print(f"\nDone.")
+    print(f"  Chatbot: {chatbot_url}")
 
 
 if __name__ == "__main__":
