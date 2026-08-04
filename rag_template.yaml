@@ -17,10 +17,6 @@ Parameters:
     Type: String
     Description: S3 bucket that holds all Lambda deployment packages
 
-  IngestFunctionS3Key:
-    Type: String
-    Description: S3 key for the ingest Lambda deployment package
-
   RagNodeFunctionS3Key:
     Type: String
     Description: S3 key for the RAG Node.js Lambda deployment package
@@ -28,6 +24,10 @@ Parameters:
   LogIndexerFunctionS3Key:
     Type: String
     Description: S3 key for the log indexer Lambda deployment package
+
+  RagSignerFunctionS3Key:
+    Type: String
+    Description: S3 key for the Lambda@Edge request-signing deployment package
 
   ChatbotAlias:
     Type: String
@@ -63,12 +63,6 @@ Parameters:
     Description: >-
       Base64-encoded "username:password" for the logs site basic-auth CloudFront function.
       Generate with: echo -n "user:pass" | base64
-
-  GoogleSheetsSecretArn:
-    Type: String
-    Description: >-
-      Full ARN of the Secrets Manager secret for Google Sheets credentials
-      used by the ingest Lambda (e.g. arn:aws:secretsmanager:us-east-1:ACCOUNT:secret:name-SUFFIX)
 
 Resources:
 
@@ -115,6 +109,24 @@ Resources:
                 AWS:SourceArn:
                   - !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${ChatbotDistribution}
                   - !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${LogsDistribution}
+          - Sid: AllowLambdaObjectAccess
+            Effect: Allow
+            Principal:
+              AWS:
+                - !GetAtt RagNodeFunctionRole.Arn
+                - !GetAtt LogIndexerFunctionRole.Arn
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+            Resource: !Sub arn:aws:s3:::${DataBucket}/*
+          - Sid: AllowLambdaListBucket
+            Effect: Allow
+            Principal:
+              AWS:
+                - !GetAtt RagNodeFunctionRole.Arn
+                - !GetAtt LogIndexerFunctionRole.Arn
+            Action: s3:ListBucket
+            Resource: !Sub arn:aws:s3:::${DataBucket}
 
   # ============================================================
   # CloudFront — chatbot frontend (ChatbotAlias → /front)
@@ -158,6 +170,11 @@ Resources:
             OriginAccessControlId: !GetAtt ChatbotOriginAccessControl.Id
             S3OriginConfig:
               OriginAccessIdentity: ''
+          - Id: lambda-api-origin
+            DomainName: !Select [2, !Split ["/", !GetAtt RagNodeFunctionUrl.FunctionUrl]]
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
         DefaultCacheBehavior:
           TargetOriginId: s3-chatbot-origin
           ViewerProtocolPolicy: redirect-to-https
@@ -179,7 +196,27 @@ Resources:
           GeoRestriction:
             RestrictionType: none
             Locations: []
-        CacheBehaviors: []
+        CacheBehaviors:
+          - PathPattern: /api*
+            TargetOriginId: lambda-api-origin
+            ViewerProtocolPolicy: https-only
+            Compress: false
+            AllowedMethods:
+              - DELETE
+              - GET
+              - HEAD
+              - OPTIONS
+              - PATCH
+              - POST
+              - PUT
+            CachedMethods:
+              - HEAD
+              - GET
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            LambdaFunctionAssociations:
+              - EventType: origin-request
+                LambdaFunctionARN: !Ref RagSignerFunctionVersion
+                IncludeBody: true
         CustomErrorResponses: []
         OriginGroups:
           Quantity: 0
@@ -409,109 +446,13 @@ Resources:
             filterConfiguration:
               maxFileSizeInMegaBytes: '500'
               inclusionPrefixes:
-                - product-files/
+                - knowledgebase-files/
             version: '1'
             aclEnabled: false
             connectionConfiguration:
               bucketName: !Ref DataBucket
               bucketOwnerAccountId: !Ref AWS::AccountId
               bucketArn: !Sub arn:aws:s3:::${DataBucket}
-
-  # ============================================================
-  # Lambda — Ingest (Python 3.13)
-  # ============================================================
-
-  IngestFunctionBasicExecutionPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      ManagedPolicyName: !Sub AWSLambdaBasicExecutionRole-${AppName}-rag-ingest
-      Path: /service-role/
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Action: logs:CreateLogGroup
-            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
-          - Effect: Allow
-            Action:
-              - logs:CreateLogStream
-              - logs:PutLogEvents
-            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppName}-rag-ingest:*
-
-  IngestFunctionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub ${AppName}-rag-ingest-role
-      Path: /service-role/
-      MaxSessionDuration: 3600
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - !Ref IngestFunctionBasicExecutionPolicy
-      Policies:
-        - PolicyName: !Sub ${AppName}-rag-ingest-role
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Sid: VisualEditor0
-                Effect: Allow
-                Action:
-                  - s3:PutObject
-                  - s3:GetObject
-                Resource: !Sub arn:aws:s3:::${DataBucket}/product-files/*
-              - Sid: VisualEditor1
-                Effect: Allow
-                Action: secretsmanager:GetSecretValue
-                Resource: !Ref GoogleSheetsSecretArn
-              - Sid: VisualEditor2
-                Effect: Allow
-                Action: s3:ListBucket
-                Resource: !Sub arn:aws:s3:::${DataBucket}
-              - Sid: VisualEditor3
-                Effect: Allow
-                Action: bedrock:StartIngestionJob
-                Resource: !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${KnowledgeBase}
-
-  IngestFunction:
-    Type: AWS::Lambda::Function
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      FunctionName: !Sub ${AppName}-rag-ingest
-      Description: ''
-      Runtime: python3.13
-      Handler: lambda_function.lambda_handler
-      Role: !GetAtt IngestFunctionRole.Arn
-      Code:
-        S3Bucket: !Ref LambdaCodeS3Bucket
-        S3Key: !Ref IngestFunctionS3Key
-      MemorySize: 128
-      Timeout: 300
-      PackageType: Zip
-      Architectures:
-        - x86_64
-      EphemeralStorage:
-        Size: 512
-      TracingConfig:
-        Mode: PassThrough
-      RuntimeManagementConfig:
-        UpdateRuntimeOn: Auto
-      LoggingConfig:
-        LogFormat: Text
-        LogGroup: !Sub /aws/lambda/${AppName}-rag-ingest
-      RecursiveLoop: Terminate
-      FileSystemConfigs: []
-      Environment:
-        Variables:
-          KNOWLEDGE_BASE_ID: !Ref KnowledgeBase
-          DATA_SOURCE_ID: !GetAtt KnowledgeBaseDataSource.DataSourceId
-          DATA_BUCKET: !Ref DataBucket
-          GOOGLE_SHEETS_SECRET_ARN: !Ref GoogleSheetsSecretArn
 
   # ============================================================
   # Lambda — RAG Node.js (nodejs24.x) with Function URL
@@ -606,24 +547,70 @@ Resources:
     Properties:
       TargetFunctionArn: !Ref RagNodeFunction
       InvokeMode: RESPONSE_STREAM
-      AuthType: NONE
-      Cors:
-        AllowCredentials: false
-        AllowOrigins:
-          - !Sub https://${ChatbotAlias}
-        AllowMethods:
-          - POST
-        AllowHeaders:
-          - content-type
+      AuthType: AWS_IAM
 
-  # Allows public invocation via the function URL
-  RagNodeFunctionUrlInvokePermission:
+  # Allows the Lambda@Edge signer role to invoke the function URL with IAM signing
+  RagNodeFunctionSignerPermission:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !GetAtt RagNodeFunction.Arn
       Action: lambda:InvokeFunctionUrl
-      FunctionUrlAuthType: NONE
-      Principal: '*'
+      FunctionUrlAuthType: AWS_IAM
+      Principal: !GetAtt RagSignerFunctionRole.Arn
+
+  # ============================================================
+  # Lambda@Edge — request signer (adds SigV4 auth headers for Lambda URL)
+  # ============================================================
+
+  RagSignerFunctionBasicExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub AWSLambdaBasicExecutionRole-${AppName}-rag-signer
+      Path: /service-role/
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: arn:aws:logs:*:*:*
+
+  RagSignerFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AppName}-rag-signer-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - edgelambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref RagSignerFunctionBasicExecutionPolicy
+
+  RagSignerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${AppName}-rag-signer
+      Runtime: nodejs18.x
+      Handler: index.handler
+      Role: !GetAtt RagSignerFunctionRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref RagSignerFunctionS3Key
+      Timeout: 5
+      MemorySize: 128
+
+  RagSignerFunctionVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref RagSignerFunction
+      Description: !Sub "Signer for ${AppName} — key ${RagSignerFunctionS3Key}"
 
   # ============================================================
   # Lambda — Log Indexer (Python 3.14)
@@ -709,44 +696,6 @@ Resources:
         Variables:
           DATA_BUCKET: !Ref DataBucket
 
-  # ============================================================
-  # EventBridge Scheduler — ingest pipeline
-  # ============================================================
-
-  IngestSchedulerExecutionPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      ManagedPolicyName: !Sub ${AppName}-ingest-scheduler-policy
-      Path: /service-role/
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Action:
-              - lambda:InvokeFunction
-            Resource:
-              - !GetAtt IngestFunction.Arn
-              - !Sub ${IngestFunction.Arn}:*
-
-  IngestSchedulerRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub ${AppName}-ingest-scheduler-role
-      Path: /service-role/
-      MaxSessionDuration: 3600
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: scheduler.amazonaws.com
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals:
-                aws:SourceAccount: !Ref AWS::AccountId
-      ManagedPolicyArns:
-        - !Ref IngestSchedulerExecutionPolicy
-
   # Dedicated scheduler execution role for the log indexer nightly run.
   # The original export reused the Lambda's own role here, which lacked
   # lambda:InvokeFunction — this dedicated role is the correct pattern.
@@ -787,49 +736,6 @@ Resources:
   # NOTE: The "default" schedule group is auto-created in every AWS account/region.
   # Omitting it here to avoid stack failures if it already exists.
   # The schedules below reference it by name ("default"), which is always valid.
-
-  HourlyIngestSchedule:
-    Type: AWS::Scheduler::Schedule
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      Name: !Sub ${AppName}-hourly
-      GroupName: default
-      Description: ''
-      State: ENABLED
-      ScheduleExpression: 'cron(0 * * * ? *)'
-      ScheduleExpressionTimezone: America/Toronto
-      FlexibleTimeWindow:
-        Mode: FLEXIBLE
-        MaximumWindowInMinutes: 30
-      Target:
-        Arn: !GetAtt IngestFunction.Arn
-        RoleArn: !GetAtt IngestSchedulerRole.Arn
-        Input: '{}'
-        RetryPolicy:
-          MaximumEventAgeInSeconds: 86400
-          MaximumRetryAttempts: 185
-
-  Every15MinutesIngestSchedule:
-    Type: AWS::Scheduler::Schedule
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      Name: !Sub ${AppName}-every-15-minutes
-      GroupName: default
-      Description: ''
-      State: DISABLED
-      ScheduleExpression: 'cron(15,30,45 * * * ? *)'
-      ScheduleExpressionTimezone: America/Toronto
-      FlexibleTimeWindow:
-        Mode: FLEXIBLE
-        MaximumWindowInMinutes: 10
-      Target:
-        Arn: !GetAtt IngestFunction.Arn
-        RoleArn: !GetAtt IngestSchedulerRole.Arn
-        RetryPolicy:
-          MaximumEventAgeInSeconds: 86400
-          MaximumRetryAttempts: 0
 
   NightlyLogIndexerSchedule:
     Type: AWS::Scheduler::Schedule
@@ -872,5 +778,5 @@ Outputs:
     Value: !GetAtt RagNodeFunctionUrl.FunctionUrl
 
   DataBucketName:
-    Description: S3 bucket name (RAG data at /product-files, frontend at /front, logs at /logs)
+    Description: S3 bucket name (RAG data at /knowledgebase-files, frontend at /front, logs at /logs)
     Value: !Ref DataBucket

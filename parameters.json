@@ -1,15 +1,11 @@
 [
   {
     "ParameterKey": "AppName",
-    "ParameterValue": "jay-chat"
+    "ParameterValue": "genious-jay"
   },
   {
     "ParameterKey": "LambdaCodeS3Bucket",
-    "ParameterValue": "jaymuntz-rag-lambdas"
-  },
-  {
-    "ParameterKey": "IngestFunctionS3Key",
-    "ParameterValue": "rag-ingest.zip"
+    "ParameterValue": "parts-assistant-rag-lambdas"
   },
   {
     "ParameterKey": "RagNodeFunctionS3Key",
@@ -20,35 +16,35 @@
     "ParameterValue": "rag-log-indexer.zip"
   },
   {
+    "ParameterKey": "RagSignerFunctionS3Key",
+    "ParameterValue": "rag-signer.zip"
+  },
+  {
     "ParameterKey": "ChatbotAlias",
-    "ParameterValue": "edge.jaymuntz.com"
+    "ParameterValue": "genious-jay.jaymuntz.com"
   },
   {
     "ParameterKey": "LogsAlias",
-    "ParameterValue": "chat-logs.jaymuntz.com"
+    "ParameterValue": "genious-jay-logs.jaymuntz.com"
   },
   {
     "ParameterKey": "ChatbotAcmCertificateArn",
-    "ParameterValue": "arn:aws:acm:us-east-1:666781058351:certificate/fd50c195-0855-42d1-b9ab-94a89a6a3bab"
+    "ParameterValue": "arn:aws:acm:us-east-1:666781058351:certificate/1afd78ee-4cb4-44db-a513-bd1dd42b6d10"
   },
   {
     "ParameterKey": "LogsAcmCertificateArn",
-    "ParameterValue": "arn:aws:acm:us-east-1:666781058351:certificate/785deb68-cee5-42d9-9d7a-c95e8505e546"
+    "ParameterValue": "arn:aws:acm:us-east-1:666781058351:certificate/23bda811-48c6-4dc8-9c47-4087a9bd90e8"
   },
   {
     "ParameterKey": "ChatbotWafAclArn",
-    "ParameterValue": "arn:aws:wafv2:us-east-1:666781058351:global/webacl/jay-chat-chatbot-waf/7d4aa692-6128-4110-954d-4d7882d6ccee"
+    "ParameterValue": "arn:aws:wafv2:us-east-1:666781058351:global/webacl/genious-jay-chatbot-waf/65f54d20-bf20-430e-9574-d08bcac93494"
   },
   {
     "ParameterKey": "LogsWafAclArn",
-    "ParameterValue": "arn:aws:wafv2:us-east-1:666781058351:global/webacl/jay-chat-logs-waf/d2b4e41a-111d-4a48-a153-43039a5d8680"
+    "ParameterValue": "arn:aws:wafv2:us-east-1:666781058351:global/webacl/genious-jay-logs-waf/e7311b49-8218-412c-bc61-c6bc7a44d948"
   },
   {
     "ParameterKey": "LogsBasicAuthBase64",
     "ParameterValue": "amF5bXVudHo6c2xpcHAx"
-  },
-  {
-    "ParameterKey": "GoogleSheetsSecretArn",
-    "ParameterValue": "arn:aws:secretsmanager:us-east-1:666781058351:secret:dealersedge/google-sheets-credentials-4Y85n0"
   }
 ]

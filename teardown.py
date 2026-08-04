@@ -324,7 +324,7 @@ def main():
     parser = argparse.ArgumentParser(description="Tear down the CloudFormation stack and all related resources")
     parser.add_argument("--profile",    default="bedrock-course", help="AWS profile (default: bedrock-course)")
     parser.add_argument("--region",     default="us-east-1",      help="AWS region (default: us-east-1)")
-    parser.add_argument("--stack-name", default="jay-chat",        help="CloudFormation stack name (default: jay-chat)")
+    parser.add_argument("--stack-name", default="parts-assistant",        help="CloudFormation stack name (default: parts-assistant)")
     args = parser.parse_args()
 
     profile    = args.profile
@@ -386,12 +386,10 @@ def main():
     print("\n=== Step 5: Delete retained resources ===")
     delete_cloudfront_function(cf, f"{app}-password-protect-logs")
 
-    delete_lambda_function(lam, f"{app}-rag-ingest")
     delete_lambda_function(lam, f"{app}-rag-node")
     delete_lambda_function(lam, f"{app}-rag-log-indexer")
+    delete_lambda_function(lam, f"{app}-rag-signer")
 
-    delete_schedule(scheduler, f"{app}-hourly")
-    delete_schedule(scheduler, f"{app}-every-15-minutes")
     delete_schedule(scheduler, f"{app}-nightly")
 
     delete_bedrock_resources(bedrock, kb_id, ds_id)
