@@ -549,8 +549,9 @@ def prompt_deployment_config(params):
 
     kb_files = input("Knowledge base files directory (Enter to skip): ").strip() or None
 
-    set_param(params, "AppName",      stack_name)
-    set_param(params, "ChatbotAlias", new_chatbot_alias)
+    set_param(params, "AppName",              stack_name)
+    set_param(params, "LambdaCodeS3Bucket",   f"{stack_name}-rag-lambdas")
+    set_param(params, "ChatbotAlias",         new_chatbot_alias)
     save_params(params)
 
     return stack_name, kb_files, use_custom_domain
