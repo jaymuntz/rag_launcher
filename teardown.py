@@ -345,7 +345,7 @@ def main():
     parser = argparse.ArgumentParser(description="Tear down the CloudFormation stack and all related resources")
     parser.add_argument("--profile",    default="bedrock-course", help="AWS profile (default: bedrock-course)")
     parser.add_argument("--region",     default="us-east-1",      help="AWS region (default: us-east-1)")
-    parser.add_argument("--stack-name", default="parts-assistant",        help="CloudFormation stack name (default: parts-assistant)")
+    parser.add_argument("--stack-name", required=True, help="CloudFormation stack name to tear down")
     args = parser.parse_args()
 
     profile    = args.profile
