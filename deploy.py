@@ -562,7 +562,7 @@ def prompt_deployment_config(params):
 
 def main():
     parser = argparse.ArgumentParser(description="Deploy the CloudFormation stack and prerequisites")
-    parser.add_argument("--profile", default="bedrock-course", help="AWS profile (default: bedrock-course)")
+    parser.add_argument("--profile", default="default", help="AWS profile (default: default)")
     parser.add_argument("--region",  default="us-east-1",      help="AWS region (default: us-east-1)")
     args = parser.parse_args()
 
