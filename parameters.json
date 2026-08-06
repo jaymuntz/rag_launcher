@@ -1,11 +1,11 @@
 [
   {
     "ParameterKey": "AppName",
-    "ParameterValue": "barky4"
+    "ParameterValue": "barky6"
   },
   {
     "ParameterKey": "LambdaCodeS3Bucket",
-    "ParameterValue": "parts-assistant-rag-lambdas"
+    "ParameterValue": "barky6-rag-lambdas"
   },
   {
     "ParameterKey": "RagNodeFunctionS3Key",
@@ -17,18 +17,18 @@
   },
   {
     "ParameterKey": "RagSignerSuffix",
-    "ParameterValue": "06672"
+    "ParameterValue": "cfcb4"
   },
   {
     "ParameterKey": "ChatbotAlias",
-    "ParameterValue": "barky4.jaymuntz.com"
+    "ParameterValue": "barky6.jaymuntz.com"
   },
   {
     "ParameterKey": "ChatbotAcmCertificateArn",
-    "ParameterValue": "arn:aws:acm:us-east-1:666781058351:certificate/747a6d17-9f00-4e3a-b236-66227eed0a6e"
+    "ParameterValue": "arn:aws:acm:us-east-1:666781058351:certificate/2a4143c7-164f-423b-a35c-3dc76ea03d57"
   },
   {
     "ParameterKey": "ChatbotWafAclArn",
-    "ParameterValue": "arn:aws:wafv2:us-east-1:666781058351:global/webacl/barky4-chatbot-waf/8e8ab43d-636a-4d9b-8cd3-3c6dd707270d"
+    "ParameterValue": "arn:aws:wafv2:us-east-1:666781058351:global/webacl/barky6-chatbot-waf/03daf03c-6dca-4f02-b325-0bb02b0e33f2"
   }
 ]

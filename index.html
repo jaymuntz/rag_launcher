@@ -107,7 +107,7 @@
         const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
         function renderAnswer(answer) {
-            return marked.parse(answer.replace(/\[[\d?]+\]/g, ''));
+            return marked.parse(answer);
         }
 
         function setInputsDisabled(disabled) {

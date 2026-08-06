@@ -14,22 +14,7 @@ const bedrockRuntime = new BedrockRuntimeClient({});
 const { Body } = await s3.send(new GetObjectCommand({ Bucket: DATA_BUCKET, Key: "system_prompt.txt" }));
 const SYSTEM_PROMPT = await Body.transformToString();
 
-function getSourceMetadata(result) {
-  const meta = result.metadata || {};
-  const memberUrl = meta["memberUrl"];
-  if (!memberUrl) return null;
-  return {
-    memberUrl,
-    productUrl: meta["productUrl"] || "",
-    title: meta["title"] || "",
-    productType: meta["productType"] || "",
-    airDate: meta["airDate"] || "",
-    speaker: meta["speaker"] || "",
-    productImage: meta["productImage"] || "",
-  };
-}
-
-export const handler = awslambda.streamifyResponse(async (event, responseStream, context) => {
+export const handler = awslambda.streamifyResponse(async (event, responseStream) => {
   const httpStream = awslambda.HttpResponseStream.from(responseStream, {
     statusCode: 200,
     headers: {
@@ -46,44 +31,22 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream,
   let streamedText = "";
 
   try {
-    // Step 1: Retrieve KB chunks (~1s, all at once)
     const retrieveResponse = await bedrockAgent.send(new RetrieveCommand({
       knowledgeBaseId: KB_ID,
       retrievalQuery: { text: userQuery },
     }));
 
-    const retrievalResults = retrieveResponse.retrievalResults || [];
+    const contextText = (retrieveResponse.retrievalResults || [])
+      .map(r => r.content?.text || "")
+      .join("\n\n");
 
-    // Build deduplicated source list and numbered context for the prompt
-    const urlToNum = {};
-    const uniqueSources = [];
-
-    const contextLines = retrievalResults.map((result) => {
-      const source = getSourceMetadata(result);
-      let num;
-      if (source) {
-        const { memberUrl } = source;
-        if (!(memberUrl in urlToNum)) {
-          uniqueSources.push(source);
-          urlToNum[memberUrl] = uniqueSources.length;
-        }
-        num = urlToNum[memberUrl];
-      } else {
-        num = "?";
-      }
-      return `[${num}] ${result.content?.text || ""}`;
-    });
-
-    const contextText = contextLines.join("\n\n");
-
-    // Step 2: Stream tokens via ConverseStream (true progressive streaming)
     const converseResponse = await bedrockRuntime.send(new ConverseStreamCommand({
       modelId: MODEL_ID,
       system: [{ text: SYSTEM_PROMPT }],
       messages: [{
         role: "user",
         content: [{
-          text: `Answer the question using ONLY the sources below. Cite sources inline with [n] markers matching the source numbers.\n\nSources:\n${contextText}\n\nQuestion: ${userQuery}`,
+          text: `Answer the question using ONLY the sources below.\n\nSources:\n${contextText}\n\nQuestion: ${userQuery}`,
         }],
       }],
     }));
@@ -96,7 +59,7 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream,
       }
     }
 
-    send({ type: "done", answer: streamedText, sources: uniqueSources });
+    send({ type: "done", answer: streamedText });
   } catch (err) {
     console.error("Error:", err);
     send({ type: "error", message: err.message });
