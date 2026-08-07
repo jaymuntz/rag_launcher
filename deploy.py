@@ -4,11 +4,12 @@ Full deployment script for the jay-chat CloudFormation stack.
 
 Steps:
   1. ACM certificates (us-east-1) with Route53 DNS validation
-  2. WAF Web ACLs (us-east-1, CLOUDFRONT scope)
-  3. Build Lambda zips from source and upload to S3
-  4. Pre-flight check for orphaned retained resources
-  5. Deploy CloudFormation stack
-  6. Post-deploy Route53 CNAMEs pointing aliases to CloudFront domains
+  2. Build Lambda zips from source and upload to S3
+  3. Pre-flight check for orphaned retained resources
+  4. Deploy CloudFormation stack
+  5. Upload frontend (index.html, favicon.ico, system_prompt.txt)
+  6. Upload knowledge base files (optional)
+  7. Post-deploy Route53 CNAMEs pointing aliases to CloudFront domains
 """
 
 import argparse
@@ -154,53 +155,7 @@ def _find_hosted_zone(route53, domain):
 
 
 # ---------------------------------------------------------------------------
-# Step 2: WAF Web ACLs
-# ---------------------------------------------------------------------------
-
-def ensure_waf_acl(wafv2, params, name_suffix, arn_key):
-    app_name = get_param(params, "AppName")
-    acl_name = f"{app_name}-{name_suffix}"
-    existing_arn = get_param(params, arn_key)
-    if existing_arn == SENTINEL:
-        existing_arn = None
-
-    if existing_arn:
-        try:
-            parts = existing_arn.split("/")
-            wafv2.get_web_acl(Name=parts[-2], Scope="CLOUDFRONT", Id=parts[-1])
-            print(f"  [{acl_name}] WAF ACL already exists")
-            return
-        except ClientError:
-            print(f"  [{acl_name}] stored ARN not found, creating new ACL")
-
-    # Check by name
-    for acl in wafv2.list_web_acls(Scope="CLOUDFRONT").get("WebACLs", []):
-        if acl["Name"] == acl_name:
-            print(f"  [{acl_name}] found existing WAF ACL")
-            set_param(params, arn_key, acl["ARN"])
-            save_params(params)
-            return
-
-    print(f"  [{acl_name}] creating WAF ACL")
-    resp = wafv2.create_web_acl(
-        Name=acl_name,
-        Scope="CLOUDFRONT",
-        DefaultAction={"Allow": {}},
-        VisibilityConfig={
-            "SampledRequestsEnabled": True,
-            "CloudWatchMetricsEnabled": True,
-            "MetricName": acl_name,
-        },
-        Rules=[],
-    )
-    arn = resp["Summary"]["ARN"]
-    print(f"  [{acl_name}] created: {arn}")
-    set_param(params, arn_key, arn)
-    save_params(params)
-
-
-# ---------------------------------------------------------------------------
-# Step 3: Build Lambda zips and upload to S3
+# Step 2: Build Lambda zips and upload to S3
 # ---------------------------------------------------------------------------
 
 def build_and_upload_lambdas(s3, params):
@@ -245,7 +200,7 @@ def _build_signer(zip_path, app_name):
 
 
 # ---------------------------------------------------------------------------
-# Step 4: Pre-flight check for orphaned retained resources
+# Step 3: Pre-flight check for orphaned retained resources
 # ---------------------------------------------------------------------------
 
 def preflight_check(session, params, profile):
@@ -332,7 +287,7 @@ def preflight_check(session, params, profile):
 
 
 # ---------------------------------------------------------------------------
-# Step 5: Deploy CloudFormation stack
+# Step 4: Deploy CloudFormation stack
 # ---------------------------------------------------------------------------
 
 def deploy_stack(profile, region, stack_name):
@@ -350,7 +305,7 @@ def deploy_stack(profile, region, stack_name):
 
 
 # ---------------------------------------------------------------------------
-# Step 6: Upload knowledge base files
+# Step 6: Upload knowledge base files (optional)
 # ---------------------------------------------------------------------------
 
 def upload_kb_files(s3, kb_files_path, stack_name, sess):
@@ -415,7 +370,7 @@ def upload_kb_files(s3, kb_files_path, stack_name, sess):
 
 
 # ---------------------------------------------------------------------------
-# Step 6: Upload frontend (index.html)
+# Step 5: Upload frontend (index.html, favicon.ico, system_prompt.txt)
 # ---------------------------------------------------------------------------
 
 def upload_frontend(s3, stack_name, params, sess):
@@ -475,7 +430,7 @@ def upload_frontend(s3, stack_name, params, sess):
 
 
 # ---------------------------------------------------------------------------
-# Step 7: Post-deploy Route53 CNAMEs
+# Step 7: Post-deploy Route53 CNAMEs (optional)
 # ---------------------------------------------------------------------------
 
 def post_deploy_dns(session, route53, params, stack_name):
@@ -576,7 +531,6 @@ def main():
     sess    = boto3.Session(profile_name=profile, region_name=region)
 
     acm     = sess.client("acm",    region_name="us-east-1")
-    wafv2   = sess.client("wafv2",  region_name="us-east-1")
     route53 = sess.client("route53")
     s3      = sess.client("s3",     region_name="us-east-1")
 
@@ -586,13 +540,10 @@ def main():
     else:
         print("\n=== Step 1: ACM Certificates (skipped — no custom domain) ===")
 
-    print("\n=== Step 2: WAF Web ACLs ===")
-    ensure_waf_acl(wafv2, params, "chatbot-waf", "ChatbotWafAclArn")
-
-    print("\n=== Step 3: Lambda packages ===")
+    print("\n=== Step 2: Lambda packages ===")
     build_and_upload_lambdas(s3, params)
 
-    print("\n=== Step 4: Pre-flight check ===")
+    print("\n=== Step 3: Pre-flight check ===")
     preflight_check(sess, params, profile)
 
     signer_suffix = uuid.uuid4().hex[:5]
@@ -600,21 +551,21 @@ def main():
     save_params(params)
     print(f"  Signer suffix: {signer_suffix}")
 
-    print("\n=== Step 5: Deploy CloudFormation stack ===")
+    print("\n=== Step 4: Deploy CloudFormation stack ===")
     deploy_stack(profile, region, stack_name)
 
-    print("\n=== Step 6: Upload frontend ===")
+    print("\n=== Step 5: Upload frontend ===")
     upload_frontend(s3, stack_name, params, sess)
 
     if kb_files:
-        print("\n=== Step 7: Upload knowledge base files ===")
+        print("\n=== Step 6: Upload knowledge base files ===")
         upload_kb_files(s3, kb_files, stack_name, sess)
 
     if use_custom_domain:
-        print("\n=== Step 8: Post-deploy DNS ===")
+        print("\n=== Step 7: Post-deploy DNS ===")
         post_deploy_dns(sess, route53, params, stack_name)
     else:
-        print("\n=== Step 8: Post-deploy DNS (skipped — no custom domain) ===")
+        print("\n=== Step 7: Post-deploy DNS (skipped — no custom domain) ===")
 
     # Print the live URLs so the user knows where to find the deployment
     cfn = sess.client("cloudformation")

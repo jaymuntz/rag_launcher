@@ -42,9 +42,6 @@ Parameters:
     Default: ""
     Description: ACM certificate ARN (must be in us-east-1) covering ChatbotAlias. Leave blank if not using a custom domain.
 
-  ChatbotWafAclArn:
-    Type: String
-    Description: WAF Web ACL ARN for the chatbot CloudFront distribution
 
 Conditions:
   HasCustomDomain: !Not [!Equals [!Ref ChatbotAlias, ""]]
@@ -148,7 +145,7 @@ Resources:
             SslSupportMethod: sni-only
             AcmCertificateArn: !Ref ChatbotAcmCertificateArn
           - CloudFrontDefaultCertificate: true
-        WebACLId: !Ref ChatbotWafAclArn
+
         Origins:
           - Id: s3-chatbot-origin
             DomainName: !Sub ${DataBucket}.s3.amazonaws.com

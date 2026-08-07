@@ -26,9 +26,5 @@
   {
     "ParameterKey": "ChatbotAcmCertificateArn",
     "ParameterValue": "arn:aws:acm:us-east-1:666781058351:certificate/2a4143c7-164f-423b-a35c-3dc76ea03d57"
-  },
-  {
-    "ParameterKey": "ChatbotWafAclArn",
-    "ParameterValue": "arn:aws:wafv2:us-east-1:666781058351:global/webacl/barky6-chatbot-waf/03daf03c-6dca-4f02-b325-0bb02b0e33f2"
   }
 ]

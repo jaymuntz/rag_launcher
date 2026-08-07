@@ -8,10 +8,8 @@ Deletes everything created by deploy.py:
   3.  Delete CloudFormation stack (handles IAM, OACs, bucket policy, etc.)
   4.  Wait for distributions to finish disabling, then delete them
   5.  Delete retained resources:
-        CloudFront function, Lambda functions, EventBridge schedules,
-        Bedrock data source + knowledge base, S3 data bucket
-  6.  Delete WAF ACLs
-  7.  Delete ACM certificates
+        Lambda functions, Bedrock data source + knowledge base, S3 data bucket
+  6.  Delete ACM certificates
 
 The Lambda code bucket (LambdaCodeS3Bucket) is NOT deleted — it may
 contain other projects' artifacts. Delete it manually if desired.
@@ -237,7 +235,7 @@ def delete_lambda_function(lam, name):
             print(
                 f"  WARNING: Cannot delete Lambda {name} — it is a Lambda@Edge function with"
                 f" replicas still being removed by AWS. Wait 1-2 hours, then run:\n"
-                f"    aws lambda delete-function --function-name {name} --region us-east-1 --profile bedrock-course"
+                f"    aws lambda delete-function --function-name {name} --region us-east-1"
             )
         else:
             raise
@@ -298,28 +296,7 @@ def empty_and_delete_bucket(s3, bucket_name):
 
 
 # ---------------------------------------------------------------------------
-# Step 6: Delete WAF ACLs
-# ---------------------------------------------------------------------------
-
-def delete_waf_acl(wafv2, arn):
-    if not arn:
-        return
-    parts = arn.split("/")
-    name, acl_id = parts[-2], parts[-1]
-    try:
-        resp = wafv2.get_web_acl(Name=name, Scope="CLOUDFRONT", Id=acl_id)
-        lock_token = resp["LockToken"]
-        wafv2.delete_web_acl(Name=name, Scope="CLOUDFRONT", Id=acl_id, LockToken=lock_token)
-        print(f"  Deleted WAF ACL {name}")
-    except ClientError as e:
-        if "WAFNonexistentItemException" in str(e):
-            print(f"  WAF ACL {name} not found, skipping")
-        else:
-            raise
-
-
-# ---------------------------------------------------------------------------
-# Step 7: Delete ACM certificates
+# Step 6: Delete ACM certificates
 # ---------------------------------------------------------------------------
 
 def delete_certificate(acm, arn):
@@ -363,7 +340,6 @@ def main():
     s3        = sess.client("s3")
     lam       = sess.client("lambda")
     bedrock   = sess.client("bedrock-agent")
-    wafv2     = sess.client("wafv2",  region_name="us-east-1")
     acm       = sess.client("acm",    region_name="us-east-1")
 
     confirm(f"This will permanently destroy the {stack_name} stack and all its resources. Continue?")
@@ -412,10 +388,7 @@ def main():
     bucket_name = res.get("DataBucket", f"{app}-rag-chatbot-data")
     empty_and_delete_bucket(s3, bucket_name)
 
-    print("\n=== Step 6: Delete WAF ACL ===")
-    delete_waf_acl(wafv2, get_param(params, "ChatbotWafAclArn"))
-
-    print("\n=== Step 7: Delete ACM certificate ===")
+    print("\n=== Step 6: Delete ACM certificate ===")
     delete_certificate(acm, get_param(params, "ChatbotAcmCertificateArn"))
 
     print("\nDone. The Lambda code bucket was left intact.")

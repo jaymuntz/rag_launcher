@@ -66,13 +66,12 @@ The script prompts for:
 Deploy runs these steps automatically:
 
 1. **ACM certificate** — requests and DNS-validates a TLS cert (skipped if no custom domain)
-2. **WAF Web ACL** — creates a rate-limiting firewall for the CloudFront distribution
-3. **Lambda packages** — builds and uploads `rag-node.zip` and `rag-signer.zip` to S3
-4. **Pre-flight check** — aborts if orphaned resources from a previous deploy would conflict
-5. **CloudFormation deploy** — creates all AWS resources
-6. **Frontend upload** — uploads `index.html`, `favicon.ico`, and `system_prompt.txt` to S3
-7. **Knowledge base sync** — *(if files provided)* uploads documents and triggers Bedrock ingestion
-8. **DNS** — creates a Route53 CNAME pointing your domain to CloudFront (skipped if no custom domain)
+2. **Lambda packages** — builds and uploads `rag-node.zip` and `rag-signer.zip` to S3
+3. **Pre-flight check** — aborts if orphaned resources from a previous deploy would conflict
+4. **CloudFormation deploy** — creates all AWS resources
+5. **Frontend upload** — uploads `index.html`, `favicon.ico`, and `system_prompt.txt` to S3
+6. **Knowledge base sync** — *(if files provided)* uploads documents and triggers Bedrock ingestion
+7. **DNS** — creates a Route53 CNAME pointing your domain to CloudFront (skipped if no custom domain)
 
 At the end, the chatbot URL is printed.
 
