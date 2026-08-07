@@ -38,7 +38,7 @@ aws sts get-caller-identity
 
 ### 2. Customize the system prompt
 
-Edit `system_prompt.txt` in the project root. This is loaded by the chatbot at cold-start and sets the assistant's persona and behavior.
+Edit `frontend/system_prompt.txt`. This is loaded by the chatbot at cold-start and sets the assistant's persona and behavior.
 
 ```
 You are a helpful assistant for Acme Corp. Answer questions about our products clearly and concisely.
@@ -46,7 +46,7 @@ You are a helpful assistant for Acme Corp. Answer questions about our products c
 
 ### 3. Add a favicon (optional)
 
-Place a `favicon.ico` file in the project root. It will be uploaded automatically during deploy.
+Place a `favicon.ico` file in `frontend/`. It will be uploaded automatically during deploy.
 
 ## Deploy
 
@@ -101,10 +101,10 @@ Then go to **Amazon Bedrock → Knowledge bases → {stack-name}-products-kb →
 ## Updating the chatbot
 
 ### Change the system prompt
-Edit `system_prompt.txt` and re-run `python3 deploy.py` (the frontend upload step re-uploads it).
+Edit `frontend/system_prompt.txt` and re-run `python3 deploy.py` (the frontend upload step re-uploads it).
 
 ### Update the chat UI
-Edit `index.html` and re-run `python3 deploy.py`.
+Edit `frontend/index.html` and re-run `python3 deploy.py`.
 
 ### Update rag-node Lambda code
 ```bash
@@ -129,7 +129,7 @@ Deletes all resources created by deploy, including the CloudFront distribution, 
 
 | Path | Contents |
 |---|---|
-| `front/` | Chat frontend (`index.html`, `favicon.ico`) |
+| `front/` | Chat frontend (`index.html`, `favicon.ico`, `system_prompt.txt`) |
 | `knowledgebase-files/` | Source documents for Bedrock ingestion |
 | `system_prompt.txt` | System prompt loaded by rag-node at cold-start |
 

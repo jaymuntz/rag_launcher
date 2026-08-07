@@ -374,7 +374,7 @@ def upload_kb_files(s3, kb_files_path, stack_name, sess):
 # ---------------------------------------------------------------------------
 
 def upload_frontend(s3, stack_name, params, sess):
-    html_path = BASE_DIR / "index.html"
+    html_path = BASE_DIR / "frontend" / "index.html"
     if not html_path.exists():
         print(f"  index.html not found at {html_path}, skipping")
         return
@@ -404,7 +404,7 @@ def upload_frontend(s3, stack_name, params, sess):
     )
     print(f"  Uploaded index.html → s3://{bucket}/front/index.html")
 
-    favicon_path = BASE_DIR / "favicon.ico"
+    favicon_path = BASE_DIR / "frontend" / "favicon.ico"
     if favicon_path.exists():
         s3.put_object(
             Bucket=bucket,
@@ -416,7 +416,7 @@ def upload_frontend(s3, stack_name, params, sess):
     else:
         print(f"  favicon.ico not found at {favicon_path}, skipping")
 
-    prompt_path = BASE_DIR / "system_prompt.txt"
+    prompt_path = BASE_DIR / "frontend" / "system_prompt.txt"
     if prompt_path.exists():
         s3.put_object(
             Bucket=bucket,
