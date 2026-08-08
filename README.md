@@ -19,11 +19,33 @@ Browser → CloudFront → Lambda@Edge (signer) → rag-node Lambda → Bedrock 
 - Bedrock model access enabled for **Claude Sonnet** (`us.anthropic.claude-sonnet-4-6`) in `us-east-1`  
   → AWS Console → Amazon Bedrock → Model access → Request access
 - IAM permissions to create Lambda, CloudFront, S3, Bedrock, IAM, CloudFormation resources
-- AWS CLI installed and configured
+- AWS CLI installed and configured (`brew install awscli` / `pip install awscli` / [official installer](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html))
 
-### Local tools
-- Python 3.9+ with `boto3`: `pip install boto3`
-- Node.js (only needed if you modify `rag-node/` — the zip is built from checked-in `node_modules`)
+### Python
+
+Python 3.9 or newer is required. Check your version:
+
+```bash
+python3 --version
+```
+
+If you need to install Python: `brew install python` (macOS) or download from [python.org](https://www.python.org/downloads/).
+
+Install the only required dependency:
+
+```bash
+pip3 install boto3
+```
+
+If you use a virtual environment (recommended to avoid polluting system packages):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install boto3
+```
+
+> Node.js is **not** required — `rag-node/node_modules` is checked in and the deploy script zips it directly.
 
 ## Setup
 
@@ -111,7 +133,7 @@ aws lambda update-function-code \
 python3 teardown.py --stack-name <stack-name>
 ```
 
-Deletes all resources created by deploy, including the CloudFront distribution, Bedrock knowledge base, Lambda functions, S3 data bucket, WAF ACL, and ACM certificate. Prompts for confirmation before proceeding.
+Deletes all resources created by deploy, including the CloudFront distribution, Bedrock knowledge base, Lambda functions, S3 data bucket, and Lambda code bucket. Prompts for confirmation before proceeding.
 
 > **Note on Lambda@Edge cleanup:** The `rag-signer` Lambda is replicated globally by CloudFront. If teardown reports it cannot delete the signer function, wait 1–2 hours for AWS to remove the replicas, then run the printed `aws lambda delete-function` command manually.
 
