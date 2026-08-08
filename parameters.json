@@ -1,11 +1,15 @@
 [
   {
     "ParameterKey": "AppName",
-    "ParameterValue": "barky6"
+    "ParameterValue": "barky9"
+  },
+  {
+    "ParameterKey": "AppSuffix",
+    "ParameterValue": "8b3d1"
   },
   {
     "ParameterKey": "LambdaCodeS3Bucket",
-    "ParameterValue": "barky6-rag-lambdas"
+    "ParameterValue": "barky9-rag-lambdas-8b3d1"
   },
   {
     "ParameterKey": "RagNodeFunctionS3Key",
@@ -17,14 +21,6 @@
   },
   {
     "ParameterKey": "RagSignerSuffix",
-    "ParameterValue": "cfcb4"
-  },
-  {
-    "ParameterKey": "ChatbotAlias",
-    "ParameterValue": "barky6.jaymuntz.com"
-  },
-  {
-    "ParameterKey": "ChatbotAcmCertificateArn",
-    "ParameterValue": "arn:aws:acm:us-east-1:666781058351:certificate/2a4143c7-164f-423b-a35c-3dc76ea03d57"
+    "ParameterValue": "4e6ab"
   }
 ]

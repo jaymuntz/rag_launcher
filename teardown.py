@@ -3,13 +3,11 @@
 Teardown script for the jay-chat CloudFormation stack.
 
 Deletes everything created by deploy.py:
-  1.  Route53 CNAMEs for CloudFront aliases
-  2.  Disable CloudFront distributions (async — takes a few minutes)
-  3.  Delete CloudFormation stack (handles IAM, OACs, bucket policy, etc.)
-  4.  Wait for distributions to finish disabling, then delete them
-  5.  Delete retained resources:
+  1.  Disable CloudFront distribution (async — takes a few minutes)
+  2.  Delete CloudFormation stack (handles IAM, OACs, bucket policy, etc.)
+  3.  Wait for distribution to finish disabling, then delete it
+  4.  Delete retained resources:
         Lambda functions, Bedrock data source + knowledge base, S3 data bucket
-  6.  Delete ACM certificates
 
 The Lambda code bucket (LambdaCodeS3Bucket) is NOT deleted — it may
 contain other projects' artifacts. Delete it manually if desired.
@@ -61,57 +59,7 @@ def get_stack_resources(cfn, stack_name):
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Remove Route53 CNAMEs
-# ---------------------------------------------------------------------------
-
-def delete_route53_cnames(route53, params, outputs):
-    for alias_key, output_key in [
-        ("ChatbotAlias", "ChatbotDistributionDomain"),
-    ]:
-        alias     = get_param(params, alias_key)
-        cf_domain = outputs.get(output_key)
-        if not alias or not cf_domain:
-            continue
-
-        zone_id = _find_hosted_zone(route53, alias)
-        if not zone_id:
-            print(f"  No hosted zone for {alias}, skipping")
-            continue
-
-        try:
-            route53.change_resource_record_sets(
-                HostedZoneId=zone_id,
-                ChangeBatch={"Changes": [{
-                    "Action": "DELETE",
-                    "ResourceRecordSet": {
-                        "Name": alias + ".",
-                        "Type": "CNAME",
-                        "TTL": 300,
-                        "ResourceRecords": [{"Value": cf_domain}],
-                    },
-                }]},
-            )
-            print(f"  Deleted CNAME {alias}")
-        except ClientError as e:
-            if "InvalidChangeBatch" in str(e):
-                print(f"  CNAME {alias} not found, skipping")
-            else:
-                raise
-
-
-def _find_hosted_zone(route53, domain):
-    parts = domain.split(".")
-    for i in range(len(parts) - 1):
-        candidate = ".".join(parts[i:]) + "."
-        resp = route53.list_hosted_zones_by_name(DNSName=candidate, MaxItems="1")
-        zones = resp["HostedZones"]
-        if zones and zones[0]["Name"] == candidate:
-            return zones[0]["Id"].split("/")[-1]
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Step 2: Disable CloudFront distributions (non-blocking)
+# Step 1: Disable CloudFront distribution (non-blocking)
 # ---------------------------------------------------------------------------
 
 def disable_distribution(cf, dist_id):
@@ -164,7 +112,7 @@ def wait_and_delete_distribution(cf, dist_id):
 
 
 # ---------------------------------------------------------------------------
-# Step 3: Delete CloudFormation stack
+# Step 2: Delete CloudFormation stack
 # ---------------------------------------------------------------------------
 
 def delete_stack(cfn, stack_name):
@@ -220,7 +168,7 @@ def delete_stack(cfn, stack_name):
 
 
 # ---------------------------------------------------------------------------
-# Step 5: Delete retained resources
+# Step 4: Delete retained resources
 # ---------------------------------------------------------------------------
 
 
@@ -296,25 +244,6 @@ def empty_and_delete_bucket(s3, bucket_name):
 
 
 # ---------------------------------------------------------------------------
-# Step 6: Delete ACM certificates
-# ---------------------------------------------------------------------------
-
-def delete_certificate(acm, arn):
-    if not arn:
-        return
-    try:
-        acm.delete_certificate(CertificateArn=arn)
-        print(f"  Deleted certificate {arn}")
-    except ClientError as e:
-        if "ResourceNotFoundException" in str(e):
-            print(f"  Certificate {arn} not found, skipping")
-        elif "ResourceInUseException" in str(e):
-            print(f"  Certificate {arn} still in use — delete the CloudFront distribution first")
-        else:
-            raise
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -334,48 +263,33 @@ def main():
 
     sess = boto3.Session(profile_name=profile, region_name=region)
 
-    cfn       = sess.client("cloudformation")
-    cf        = sess.client("cloudfront")
-    route53   = sess.client("route53")
-    s3        = sess.client("s3")
-    lam       = sess.client("lambda")
-    bedrock   = sess.client("bedrock-agent")
-    acm       = sess.client("acm",    region_name="us-east-1")
+    cfn     = sess.client("cloudformation")
+    cf      = sess.client("cloudfront")
+    s3      = sess.client("s3")
+    lam     = sess.client("lambda")
+    bedrock = sess.client("bedrock-agent")
 
     confirm(f"This will permanently destroy the {stack_name} stack and all its resources. Continue?")
 
-    # Collect resource IDs from the stack before we delete it
     print("\nCollecting stack resource IDs...")
     res = get_stack_resources(cfn, stack_name)
 
     chatbot_dist_id = res.get("ChatbotDistribution")
     kb_id           = res.get("KnowledgeBase")
     ds_physical     = res.get("KnowledgeBaseDataSource", "")
-    # DataSource physical ID is "knowledgeBaseId|dataSourceId"
     ds_id = ds_physical.split("|")[-1] if "|" in ds_physical else None
 
-    # Collect CloudFront domain names for DNS cleanup before stack is gone
-    outputs = {}
-    try:
-        resp = cfn.describe_stacks(StackName=stack_name)
-        outputs = {o["OutputKey"]: o["OutputValue"] for o in resp["Stacks"][0].get("Outputs", [])}
-    except ClientError:
-        pass
-
-    print("\n=== Step 1: Route53 CNAMEs ===")
-    delete_route53_cnames(route53, params, outputs)
-
-    print("\n=== Step 2: Disable CloudFront distribution ===")
+    print("\n=== Step 1: Disable CloudFront distribution ===")
     if chatbot_dist_id:
         disable_distribution(cf, chatbot_dist_id)
+
+    print("\n=== Step 2: Delete CloudFormation stack ===")
+    delete_stack(cfn, stack_name)
 
     print("\n=== Step 3: Delete CloudFront distribution ===")
     wait_and_delete_distribution(cf, chatbot_dist_id)
 
-    print("\n=== Step 4: Delete CloudFormation stack ===")
-    delete_stack(cfn, stack_name)
-
-    print("\n=== Step 5: Delete retained resources ===")
+    print("\n=== Step 4: Delete retained resources ===")
     delete_lambda_function(lam, f"{app}-rag-node")
     signer_suffix = get_param(params, "RagSignerSuffix")
     if signer_suffix:
@@ -387,9 +301,6 @@ def main():
 
     bucket_name = res.get("DataBucket", f"{app}-rag-chatbot-data")
     empty_and_delete_bucket(s3, bucket_name)
-
-    print("\n=== Step 6: Delete ACM certificate ===")
-    delete_certificate(acm, get_param(params, "ChatbotAcmCertificateArn"))
 
     print("\nDone. The Lambda code bucket was left intact.")
 

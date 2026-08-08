@@ -13,6 +13,10 @@ Parameters:
     AllowedPattern: '^[a-z][a-z0-9-]{0,19}$'
     ConstraintDescription: Must be lowercase, start with a letter, use only alphanumeric and hyphens, max 20 chars.
 
+  AppSuffix:
+    Type: String
+    Description: Short random suffix appended to S3 bucket names to prevent global name collisions. Generated once by deploy.py and preserved across re-deploys.
+
   LambdaCodeS3Bucket:
     Type: String
     Description: S3 bucket that holds all Lambda deployment packages
@@ -30,21 +34,6 @@ Parameters:
     Type: String
     Description: Short unique suffix appended to the signer function name to avoid collisions while Lambda@Edge replicas drain
 
-  ChatbotAlias:
-    Type: String
-    Default: ""
-    Description: >-
-      Custom domain alias for the chatbot CloudFront distribution (e.g. chat.example.com).
-      Leave blank to use the default CloudFront domain.
-
-  ChatbotAcmCertificateArn:
-    Type: String
-    Default: ""
-    Description: ACM certificate ARN (must be in us-east-1) covering ChatbotAlias. Leave blank if not using a custom domain.
-
-
-Conditions:
-  HasCustomDomain: !Not [!Equals [!Ref ChatbotAlias, ""]]
 
 Resources:
 
@@ -57,7 +46,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub ${AppName}-rag-chatbot-data
+      BucketName: !Sub ${AppName}-rag-chatbot-data-${AppSuffix}
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -135,16 +124,8 @@ Resources:
         HttpVersion: http2
         IPV6Enabled: true
         PriceClass: PriceClass_All
-        Aliases: !If
-          - HasCustomDomain
-          - - !Ref ChatbotAlias
-          - !Ref AWS::NoValue
-        ViewerCertificate: !If
-          - HasCustomDomain
-          - MinimumProtocolVersion: TLSv1.2_2021
-            SslSupportMethod: sni-only
-            AcmCertificateArn: !Ref ChatbotAcmCertificateArn
-          - CloudFrontDefaultCertificate: true
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
 
         Origins:
           - Id: s3-chatbot-origin
@@ -203,9 +184,6 @@ Resources:
         CustomErrorResponses: []
         OriginGroups:
           Quantity: 0
-          Items: []
-
-  # ============================================================
           Items: []
 
   # ============================================================

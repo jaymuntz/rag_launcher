@@ -18,7 +18,7 @@ Browser → CloudFront → Lambda@Edge (signer) → rag-node Lambda → Bedrock 
 ### AWS account
 - Bedrock model access enabled for **Claude Sonnet** (`us.anthropic.claude-sonnet-4-6`) in `us-east-1`  
   → AWS Console → Amazon Bedrock → Model access → Request access
-- IAM permissions to create Lambda, CloudFront, S3, Bedrock, WAF, ACM, IAM, CloudFormation, EventBridge resources
+- IAM permissions to create Lambda, CloudFront, S3, Bedrock, IAM, CloudFormation resources
 - AWS CLI installed and configured
 
 ### Local tools
@@ -59,29 +59,19 @@ The script prompts for:
 | Prompt | Description |
 |---|---|
 | **Stack name** | Lowercase letters, numbers, hyphens, max 20 chars. Used as a prefix for all resource names (e.g. `my-chatbot`). |
-| **Use custom Route53 domain?** | `Y` to use your own domain, `N` to use the auto-generated CloudFront URL. |
-| **Domain** | *(if Y)* Your Route53-hosted domain (e.g. `example.com`). The chatbot will be at `{stack-name}.{domain}`. |
 | **Knowledge base files directory** | Local path to a folder of PDFs/documents to ingest. Leave blank to skip — you can upload files manually to S3 later. |
 
 Deploy runs these steps automatically:
 
-1. **ACM certificate** — requests and DNS-validates a TLS cert (skipped if no custom domain)
-2. **Lambda packages** — builds and uploads `rag-node.zip` and `rag-signer.zip` to S3
-3. **Pre-flight check** — aborts if orphaned resources from a previous deploy would conflict
-4. **CloudFormation deploy** — creates all AWS resources
-5. **Frontend upload** — uploads `index.html`, `favicon.ico`, and `system_prompt.txt` to S3
-6. **Knowledge base sync** — *(if files provided)* uploads documents and triggers Bedrock ingestion
-7. **DNS** — creates a Route53 CNAME pointing your domain to CloudFront (skipped if no custom domain)
+1. **Lambda packages** — builds and uploads `rag-node.zip` and `rag-signer.zip` to S3
+2. **Pre-flight check** — aborts if orphaned resources from a previous deploy would conflict
+3. **CloudFormation deploy** — creates all AWS resources
+4. **Frontend upload** — uploads `index.html`, `favicon.ico`, and `system_prompt.txt` to S3
+5. **Knowledge base sync** — *(if files provided)* uploads documents and triggers Bedrock ingestion
 
 At the end, the chatbot URL is printed.
 
 > **First deploy takes ~10–15 minutes** — CloudFront distribution propagation and Bedrock KB creation are the slow steps. Subsequent deploys of the same stack are faster.
-
-### Custom domain notes
-
-- Your domain must be hosted in Route53 in the same AWS account
-- The ACM certificate is created in `us-east-1` (required for CloudFront) and validated via DNS automatically
-- DNS propagation can take a few minutes after deploy completes
 
 ### Uploading knowledge base files after deploy
 
@@ -144,5 +134,3 @@ The signer role is missing its IAM policy. This can happen if the stack was part
 **Chatbot answers "I don't know" for everything**  
 The knowledge base may be empty or not yet synced. Check the Bedrock console and trigger a manual sync if needed. Also verify `system_prompt.txt` was uploaded to S3.
 
-**Custom domain not resolving**  
-DNS propagation can take a few minutes. If it's been more than 15 minutes, check that the Route53 CNAME record was created and that the ACM certificate status is `ISSUED`.
