@@ -7,10 +7,8 @@ Deletes everything created by deploy.py:
   2.  Delete CloudFormation stack (handles IAM, OACs, bucket policy, etc.)
   3.  Wait for distribution to finish disabling, then delete it
   4.  Delete retained resources:
-        Lambda functions, Bedrock data source + knowledge base, S3 data bucket
-
-The Lambda code bucket (LambdaCodeS3Bucket) is NOT deleted — it may
-contain other projects' artifacts. Delete it manually if desired.
+        Lambda functions, Bedrock data source + knowledge base, S3 data bucket,
+        Lambda code S3 bucket
 """
 
 import argparse
@@ -302,7 +300,13 @@ def main():
     bucket_name = res.get("DataBucket", f"{app}-rag-chatbot-data")
     empty_and_delete_bucket(s3, bucket_name)
 
-    print("\nDone. The Lambda code bucket was left intact.")
+    lambda_bucket = get_param(params, "LambdaCodeS3Bucket")
+    if lambda_bucket:
+        empty_and_delete_bucket(s3, lambda_bucket)
+    else:
+        print("  No LambdaCodeS3Bucket in parameters.json, skipping")
+
+    print("\nDone.")
 
 
 if __name__ == "__main__":
