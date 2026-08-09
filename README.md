@@ -17,7 +17,7 @@ Browser → CloudFront → Lambda@Edge (signer) → rag-node Lambda → Bedrock 
 
 ### AWS account
 - Bedrock model access enabled for **Claude Sonnet** (`us.anthropic.claude-sonnet-4-6`) in `us-east-1`  
-  → AWS Console → Amazon Bedrock → Model access → Request access
+  → AWS Console → Amazon Bedrock → Model Catalog → search for `claude-sonnet-4-6` → select it → complete the Anthropic use case form
 - IAM permissions to create Lambda, CloudFront, S3, Bedrock, IAM, CloudFormation resources
 - AWS CLI installed and configured (`brew install awscli` / `pip install awscli` / [official installer](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html))
 
@@ -31,18 +31,20 @@ python3 --version
 
 If you need to install Python: `brew install python` (macOS) or download from [python.org](https://www.python.org/downloads/).
 
-Install the only required dependency:
+Install the required dependencies:
 
 ```bash
-pip3 install boto3
+pip3 install boto3 "botocore[crt]"
 ```
+
+> `botocore[crt]` is required when authenticating with `aws login`. Without it you'll get a `MissingDependencyException` at runtime.
 
 If you use a virtual environment (recommended to avoid polluting system packages):
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install boto3
+pip install boto3 "botocore[crt]"
 ```
 
 > Node.js is **not** required — `rag-node/node_modules` is checked in and the deploy script zips it directly.
