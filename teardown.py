@@ -249,15 +249,16 @@ def main():
     parser = argparse.ArgumentParser(description="Tear down the CloudFormation stack and all related resources")
     parser.add_argument("--profile",    default="default", help="AWS profile (default: default)")
     parser.add_argument("--region",     default="us-east-1",      help="AWS region (default: us-east-1)")
-    parser.add_argument("--stack-name", required=True, help="CloudFormation stack name to tear down")
+    parser.add_argument("--stack-name", help="CloudFormation stack name (default: AppName from parameters.json)")
     args = parser.parse_args()
 
-    profile    = args.profile
-    region     = args.region
-    stack_name = args.stack_name
+    profile = args.profile
+    region  = args.region
 
     params = load_params()
     app    = get_param(params, "AppName")
+
+    stack_name = args.stack_name or app
 
     sess = boto3.Session(profile_name=profile, region_name=region)
 
