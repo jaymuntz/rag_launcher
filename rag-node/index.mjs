@@ -36,8 +36,26 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream)
       retrievalQuery: { text: userQuery },
     }));
 
+    // Build deduplicated citation list from retrieval results
+    const citations = [];
+    const seenUrls = new Set();
+    for (const r of retrieveResponse.retrievalResults || []) {
+      const url = r.metadata?.url;
+      const title = r.metadata?.title || url;
+      if (url && !seenUrls.has(url)) {
+        seenUrls.add(url);
+        citations.push({ url, title });
+      }
+    }
+
+    // Map each chunk to its citation number for the prompt
     const contextText = (retrieveResponse.retrievalResults || [])
-      .map(r => r.content?.text || "")
+      .map(r => {
+        const url = r.metadata?.url;
+        const citNum = url ? citations.findIndex(c => c.url === url) + 1 : null;
+        const prefix = citNum ? `[${citNum}] ` : "";
+        return `${prefix}${r.content?.text || ""}`;
+      })
       .join("\n\n");
 
     const converseResponse = await bedrockRuntime.send(new ConverseStreamCommand({
@@ -46,7 +64,7 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream)
       messages: [{
         role: "user",
         content: [{
-          text: `Answer the question using ONLY the sources below.\n\nSources:\n${contextText}\n\nQuestion: ${userQuery}`,
+          text: `Answer the question using ONLY the sources below. Cite sources inline using [1], [2], etc.\n\nSources:\n${contextText}\n\nQuestion: ${userQuery}`,
         }],
       }],
     }));
@@ -59,7 +77,15 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream)
       }
     }
 
-    send({ type: "done", answer: streamedText });
+    // Append citations as markdown links after the response
+    if (citations.length > 0) {
+      const citationBlock = "\n\n---\n**Sources:**\n" +
+        citations.map((c, i) => `${i + 1}. [${c.title}](${c.url})`).join("\n");
+      send({ type: "chunk", text: citationBlock });
+      streamedText += citationBlock;
+    }
+
+    send({ type: "done", answer: streamedText, citations });
   } catch (err) {
     console.error("Error:", err);
     send({ type: "error", message: err.message });
